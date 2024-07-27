@@ -172,6 +172,8 @@ module.exports = (function(env) {
 		session.data['state'] = 'calling';
 		session.data['direction'] = 'outbound';
 		session.data['id'] = slot;
+		session.data['peer_number'] = destination;
+		session.data['peer_name'] = destination;
 		phone.sessions[slot] = session;
 
 		phone.emit('session_update', session);
