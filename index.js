@@ -222,12 +222,12 @@ module.exports = (function(env) {
 
 		 if(session.data['state'] == 'talking') {
 			session.hold();
-			session.data['state'] = 'hold';
+			session.data['state'] = 'on hold';
 			phone.emit('session_update', session);
 			return;
 		}
 
-		if(session.data['state'] == 'hold') {
+		if(session.data['state'] == 'on hold') {
 			session.unhold();
 			session.data['state'] = 'talking';
 			phone.emit('session_update', session);
@@ -248,7 +248,7 @@ module.exports = (function(env) {
 			var s = phone.sessions[i];
 			if(i != slot && s && s.data['state'] == 'talking') {
 				s.hold();
-				s.data['state'] = 'hold';
+				s.data['state'] = 'on hold';
 				phone.emit('session_update', s);
 			}
 		}
