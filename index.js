@@ -241,6 +241,7 @@ module.exports = (function(env) {
 	phone.hangupMediaPlugSession = function() {	
 		if(!phone.media_plug_session) return;
 		phone.media_plug_session.terminate();
+		phone.emit('media_plug_terminated');
 	};
 
 	phone.holdOtherSessions = function(slot) {	
