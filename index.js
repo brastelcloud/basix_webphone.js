@@ -140,7 +140,12 @@ module.exports = (function(env) {
 			console.log("WebPhone slot=" + slot + " got event 'terminated' with cause=" + cause);
 			session.data['state'] = 'terminated';
 			phone.emit('session_update', session);
-			delete phone.sessions[session.data['id']];
+			var sessionId = session.data['id']; // Capture the session ID before deletion
+			delete phone.sessions[sessionId];
+			setTimeout(() => {
+				console.log("WebPhone: Emitting session_cleared for ID:", sessionId);
+				phone.emit('session_cleared', sessionId);
+			}, 5000);
 		});
 
 		session.on('cancel', function() {
