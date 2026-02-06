@@ -78,6 +78,7 @@ module.exports = (function (env) {
   phone.makeCall = function (destination) {
     if (!phone.isConnected) {
       console.log("Cannot make call as ua is not connected");
+      phone.emit('error', 'not_connected')
       return false;
     }
 
@@ -94,6 +95,7 @@ module.exports = (function (env) {
 
     if (slot == null) {
       console.log("All slots in use");
+      phone.emit('error', 'all_slots_in_use')
       return false;
     }
 
@@ -316,7 +318,6 @@ module.exports = (function (env) {
       phone.sessions[i] = {
         id: i,
         state: "idle",
-        // Preserve other relevant data for display if necessary, e.g., peer_number, peer_name
         peer_number: "",
         peer_name: "",
       };
@@ -350,7 +351,8 @@ module.exports = (function (env) {
 
   phone.makeMediaPlugCall = function () {
     if (!phone.isConnected) {
-      console.log("Cannot make call as ua is not connected");
+      console.log("Cannot make media_plug call as ua is not connected");
+      phone.emit('error', 'not_connected')
       return false;
     }
 
@@ -377,10 +379,12 @@ module.exports = (function (env) {
 
     session.on("rejected", function (response, cause) {
       console.log("WebPhone MediaPlug got event 'rejected'");
+      phone.emit('error', 'media_plug_call_rejected')
     });
 
     session.on("failed", function (response, cause) {
       console.log("WebPhone MediaPlug got event 'failed' with cause=" + cause);
+      phone.emit('error', 'media_plug_call_failed')
 
       window.toast_mic_access_error();
     });
