@@ -24,8 +24,8 @@ module.exports = (function(env) {
 			uri: "ws_sip_" + phone.args.user_name + "@" + phone.args.domain_name,
 			transportOptions: {
 				wsServers: ["wss://" + phone.args.app_cname + "/basix/api/ws_sip"],
-
 				maxReconnectionAttempts: 0,
+				connectionTimeout: 10000,
 			},
 			register: false,
 			registerExpires: 100,
@@ -243,13 +243,13 @@ module.exports = (function(env) {
 	};
 
 
-	phone.hangupMediaPlugSession = function() {	
+	phone.hangupMediaPlugSession = function() {
 		if(!phone.media_plug_session) return;
 		phone.media_plug_session.terminate();
 		phone.emit('media_plug_terminated');
 	};
 
-	phone.holdOtherSessions = function(slot) {	
+	phone.holdOtherSessions = function(slot) {
 		for(var i=0 ; i<phone.args.max_sessions ; ++i) {
 			var s = phone.sessions[i];
 			if(i != slot && s && s.data['state'] == 'talking') {
@@ -416,7 +416,7 @@ module.exports = (function(env) {
 
 	phone.disconnect_media_plug = function() {
 		if(phone.media_plug_session) {
-			phone.media_plug_session.terminate();			
+			phone.media_plug_session.terminate();
 		}
 	};
 
