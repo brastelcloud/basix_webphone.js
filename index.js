@@ -75,6 +75,89 @@ module.exports = (function (env) {
     console.log("WebPhone._startUA: end");
   };
 
+  phone.addCtiIncomingCall = function(channel) {
+    console.log("addCtiIncomingCall", channel)
+
+    var slot = null;
+    for (var i = 0; i < phone.args.max_sessions; ++i) {
+      if (!phone.sessions[i]) {
+        console.log("slot " + i + " OK");
+        slot = i;
+        break;
+      } else {
+        console.dir(phone.sessions[i]);
+      }
+    }
+
+    if(slot == null) {
+      console.log("No free slot for incoming call")
+      return
+    }
+
+    // Fake session
+    var session = {data: {}}
+
+    session.data["state"] = "ringing";
+    session.data["direction"] = "inbound";
+    session.data["id"] = slot;
+    session.data["peer_number"] = channel.other_info.address;
+    if (channel.other_info.type == "end_user") {
+      var end_user = channel.other_info.end_user;
+      if(end_user) {
+        session.data["peer_name"] = end_user.name;
+      }
+    } else if (channel.other_info.type == "user") {
+      var user = channel.other_info.user;
+      if(user) {
+        session.data["peer_name"] = user.name;
+      }
+    }
+    session.data["cti_channel"] = channel;
+    phone.sessions[slot] = session;
+
+    phone.emit("session_update", session);
+  }
+
+  phone.removeCtiIncomingCall = function(channel) {
+    console.log("removeCtiIncomingCall", channel)
+    console.log(phone.sessions)
+    var foundSession = null;
+    for (var i = 0; i < phone.args.max_sessions; ++i) {
+      if (phone.sessions[i]) {
+        var session = phone.sessions[i]
+        if(session.data.cti_channel && session.data.cti_channel.uuid == channel.uuid) {
+          foundSession = session
+          break;
+        }
+      }
+    }
+
+    if(foundSession == null) {
+      console.log("Incoming call not found")
+      return
+    }
+
+    foundSession.data.state = "idle"
+
+    phone.emit("session_update", foundSession); // Emit idle state
+    delete phone.sessions[foundSession.data.id]; // Finally delete the session
+  }
+
+  phone.answerCtiCall = function(slot) {
+    console.log("WebPhone answerCtiCall");
+    var session = phone.sessions[slot];
+    if (!session) {
+      console.log("No session at slot " + slot);
+      return;
+    }
+
+    if(!session.data.cti_channel) return;
+
+    phone.removeCtiIncomingCall(session.data.cti_channel);
+
+    phone.makeCall("pickup_uuid." + session.data.cti_channel.other_uuid);
+  }
+
   phone.makeCall = function (destination) {
     if (!phone.isConnected) {
       console.log("Cannot make call as ua is not connected");
@@ -254,6 +337,10 @@ module.exports = (function (env) {
       phone.emit("session_update", session);
     }
 
+    if (session.data["state"] == "ringing" && session.data.cti_channel) {
+      phone.answerCtiCall(slot)
+    }
+
     phone.holdOtherSessions(slot);
     phone.hangupMediaPlugSession();
   };
@@ -336,6 +423,58 @@ module.exports = (function (env) {
     audioTag.id = "BasixWebPhoneRemoteAudioMediaPlug";
     document.body.appendChild(audioTag);
     phone.media_plug_audio_tag = audioTag;
+
+    if(args.cti) {
+      args.cti.on('open', () => {
+        console.log("basix_webphone.js cti open")
+      })
+
+      args.cti.on('closed', () => {
+        console.log("basix_webphone.js cti closed")
+      })
+
+      args.cti.on('error', err => {
+        console.log("basix_webphone.js cti error", err)
+      })
+
+      args.cti.on('initial_info', ({element_name, data}) => {
+        // TODO
+      })
+
+      args.cti.on('info_event', ({element_name, info, event_name}) => {
+        console.log("basix_webphone.js info_event", element_name, info, event_name)
+        if(element_name != "channel") return;
+
+        var channel = info;
+
+        if(channel.user_id != phone.args.user_id) return;
+
+        if(!channel.state) {
+          console.log("no state")
+          return
+        }
+
+        if(channel.called_number != "LOCAL_PARK") {
+          console.log("no LOCAL_PARK")
+          return
+        }
+
+        if(channel.direction != "outbound") {
+          console.log("no outbound")
+          return;
+        }
+
+        if(event_name == "updated") {
+          if(channel.state.name != "ringing") {
+            console.log("no ringing")
+            return
+          }
+          phone.addCtiIncomingCall(channel);
+        } else if(event_name == "removed") {
+          phone.removeCtiIncomingCall(channel);
+        }
+      })
+    }
 
     phone._startUA();
 
