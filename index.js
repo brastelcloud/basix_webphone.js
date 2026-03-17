@@ -195,10 +195,11 @@ module.exports = (function (env) {
     };
 
     var session = phone.ua.invite("sip:" + destination + "@anything", options);
+
     session.on("progress", function (response) {
       console.log("WebPhone slot=" + slot + " got event 'progress'");
-      session.data["state"] = "progress";
-      phone.emit("session_update", session);
+      //session.data["state"] = "progress";
+      //phone.emit("session_update", session);
     });
 
     session.on("accepted", function (data) {
