@@ -101,24 +101,8 @@ module.exports = (function (env) {
     session.data["state"] = "ringing";
     session.data["direction"] = "inbound";
     session.data["id"] = slot;
-    if (channel.other_info.type == "end_user") {
-      session.data["peer_number"] = channel.other_info.address;
-      var end_user = channel.other_info.end_user;
-      if(end_user) {
-        session.data["peer_name"] = end_user.name;
-      } else {
-        session.data["peer_name"] = "---";
-      }
-    } else if (channel.other_info.type == "user") {
-      if(channel.other_info.user_id) {
-        var user = phone.args.cti.get_store()['user'][channel.other_info.user_id];
-        session.data["peer_name"] = user.label ? user.label : user.name;
-        session.data["peer_number"] = user.main_extension;
-      } else {
-        session.data["peer_name"] = channel.other_info.address;
-        session.data["peer_number"] = "";
-      }
-    }
+    session.data['peer_address'] = channel.other_info.address;
+    session.data['peer_info'] = channel.other_info;
     session.data["cti_channel"] = channel;
     phone.sessions[slot] = session;
 
@@ -162,7 +146,7 @@ module.exports = (function (env) {
 
     phone.removeCtiIncomingCall(session.data.cti_channel);
 
-    phone.makeCall("pickup_uuid." + session.data.cti_channel.other_uuid, {slot, peer_number: session.data.peer_number, peer_name: session.data.peer_name})
+    phone.makeCall("pickup_uuid." + session.data.cti_channel.other_uuid, {slot, peer_address: session.data.peer_address, peer_info: session.data.peer_info})
   }
 
   phone.makeCall = function (destination, options = {}) {
@@ -261,9 +245,8 @@ module.exports = (function (env) {
           data: {
             id: sessionId,
             state: "idle",
-            // Preserve other relevant data for display if necessary, e.g., peer_number, peer_name
-            peer_number: session.data["peer_number"],
-            peer_name: session.data["peer_name"],
+            // Preserve other relevant data for display if necessary.
+            peer_address: session.data["peer_address"],
           },
         };
         phone.emit("session_update", idleSession); // Emit idle state
@@ -300,8 +283,8 @@ module.exports = (function (env) {
     session.data["state"] = "calling";
     session.data["direction"] = "outbound";
     session.data["id"] = slot;
-    session.data["peer_number"] = options.peer_number ? options.peer_number : destination;
-    session.data["peer_name"] = options.peer_name ? options.peer_name : "---";
+    session.data["peer_address"] = options.peer_address ? options.peer_address : destination;
+    session.data["peer_info"] = options.peer_info;
     phone.sessions[slot] = session;
 
     phone.emit("session_update", session);
