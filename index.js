@@ -21,7 +21,8 @@ module.exports = (function (env) {
     phone.isConnected = false;
 
     phone.ua = new SIP.UA({
-      uri: "ws_sip_" + phone.args.user_name + "@" + phone.args.domain_name,
+      //uri: "ws_sip_" + phone.args.user_name + "@" + phone.args.domain_name,
+      uri: phone.args.user_name + "@" + phone.args.domain_name,
       transportOptions: {
         wsServers: ["wss://" + phone.args.app_cname + "/basix/api/ws_sip"],
         maxReconnectionAttempts: 0,
@@ -100,16 +101,22 @@ module.exports = (function (env) {
     session.data["state"] = "ringing";
     session.data["direction"] = "inbound";
     session.data["id"] = slot;
-    session.data["peer_number"] = channel.other_info.address;
     if (channel.other_info.type == "end_user") {
+      session.data["peer_number"] = channel.other_info.address;
       var end_user = channel.other_info.end_user;
       if(end_user) {
         session.data["peer_name"] = end_user.name;
+      } else {
+        session.data["peer_name"] = "---";
       }
     } else if (channel.other_info.type == "user") {
-      var user = channel.other_info.user;
-      if(user) {
-        session.data["peer_name"] = user.name;
+      if(channel.other_info.user_id) {
+        var user = phone.args.cti.get_store()['user'][channel.other_info.user_id];
+        session.data["peer_name"] = user.label ? user.label : user.name;
+        session.data["peer_number"] = user.main_extension;
+      } else {
+        session.data["peer_name"] = channel.other_info.address;
+        session.data["peer_number"] = "";
       }
     }
     session.data["cti_channel"] = channel;
@@ -155,24 +162,26 @@ module.exports = (function (env) {
 
     phone.removeCtiIncomingCall(session.data.cti_channel);
 
-    phone.makeCall("pickup_uuid." + session.data.cti_channel.other_uuid);
+    phone.makeCall("pickup_uuid." + session.data.cti_channel.other_uuid, {slot, peer_number: session.data.peer_number, peer_name: session.data.peer_name})
   }
 
-  phone.makeCall = function (destination) {
+  phone.makeCall = function (destination, options = {}) {
     if (!phone.isConnected) {
       console.log("Cannot make call as ua is not connected");
       phone.emit('error', 'not_connected')
       return false;
     }
 
-    var slot = null;
-    for (var i = 0; i < phone.args.max_sessions; ++i) {
-      if (!phone.sessions[i]) {
-        console.log("slot " + i + " OK");
-        slot = i;
-        break;
-      } else {
-        console.dir(phone.sessions[i]);
+    var slot = options.slot;
+    if(!slot) {
+      for (var i = 0; i < phone.args.max_sessions; ++i) {
+        if (!phone.sessions[i]) {
+          console.log("slot " + i + " OK");
+          slot = i;
+          break;
+        } else {
+          console.dir(phone.sessions[i]);
+        }
       }
     }
 
@@ -182,7 +191,12 @@ module.exports = (function (env) {
       return false;
     }
 
-    var options = {
+    if(phone.sessions[slot]) {
+      console.log(`slot=${slot} in use`)
+      return
+    }
+
+    var call_options = {
       media: {
         constraints: {
           audio: true,
@@ -194,16 +208,23 @@ module.exports = (function (env) {
       },
     };
 
-    var session = phone.ua.invite("sip:" + destination + "@anything", options);
+    var session = phone.ua.invite("sip:" + destination + "@anything", call_options);
 
     session.on("progress", function (response) {
-      console.log("WebPhone slot=" + slot + " got event 'progress'");
-      //session.data["state"] = "progress";
-      //phone.emit("session_update", session);
+      console.log("WebPhone slot=" + slot + " got event 'progress'", response);
+      if(response.body) {
+        // Early media (180 or 183 with SDP)
+        session.data["state"] = "progress";
+        phone.emit("session_update", session);
+      } else if(response.status_code == 180) {
+        // In this case the UI should play ringback tone
+        session.data["state"] = "ringing";
+        phone.emit("session_update", session);
+      }
     });
 
     session.on("accepted", function (data) {
-      console.log("WebPhone slot=" + slot + " got event 'accepted'");
+      console.log("WebPhone slot=" + slot + " got event 'accepted'", data);
       session.data["state"] = "talking";
       phone.emit("session_update", session);
       phone.holdOtherSessions(slot);
@@ -279,8 +300,8 @@ module.exports = (function (env) {
     session.data["state"] = "calling";
     session.data["direction"] = "outbound";
     session.data["id"] = slot;
-    session.data["peer_number"] = destination;
-    session.data["peer_name"] = destination;
+    session.data["peer_number"] = options.peer_number ? options.peer_number : destination;
+    session.data["peer_name"] = options.peer_name ? options.peer_name : "---";
     phone.sessions[slot] = session;
 
     phone.emit("session_update", session);
