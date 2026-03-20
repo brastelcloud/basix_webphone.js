@@ -385,6 +385,22 @@ module.exports = (function (env) {
     }
   };
 
+  phone.hangup = function (slot) {
+    console.log("Webphone hangup");
+    var session = phone.sessions[slot];
+    if (!session) {
+      console.log("No session at slot " + slot);
+      return;
+    }
+
+    if(session.data.cti_channel) {
+      phone.args.cti.hangup(session.data.cti_channel.uuid)
+    } else {
+      session.terminate();
+    }
+    return;
+  }
+
   phone.hangupCurrentCall = function () {
     for (var i = 0; i < phone.args.max_sessions; ++i) {
       var s = phone.sessions[i];
