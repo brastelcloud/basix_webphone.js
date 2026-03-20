@@ -102,7 +102,16 @@ module.exports = (function (env) {
     session.data["direction"] = "inbound";
     session.data["id"] = slot;
     session.data['peer_address'] = channel.other_info.address;
-    session.data['peer_info'] = channel.other_info;
+    var peer_info = channel.other_info;
+    if(peer_info.whoscall) {
+      var user = phone.args.cti.get_store()['user'][channel.user_id]
+      if(user.flags & 1024) {
+        peer_info.whoscall = JSON.parse(decodeURIComponent(peer_info.whoscall))
+      } else {
+        peer_info.whoscall = null
+      }
+    }
+    session.data['peer_info'] = peer_info;
     session.data["cti_channel"] = channel;
     phone.sessions[slot] = session;
 
@@ -284,7 +293,7 @@ module.exports = (function (env) {
     session.data["direction"] = "outbound";
     session.data["id"] = slot;
     session.data["peer_address"] = options.peer_address ? options.peer_address : destination;
-    session.data["peer_info"] = options.peer_info;
+    session.data['peer_info'] = options.peer_info;
     phone.sessions[slot] = session;
 
     phone.emit("session_update", session);
