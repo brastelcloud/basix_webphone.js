@@ -545,6 +545,7 @@ module.exports = (function (env) {
               user: channel_waiting.user,
               parker,
               uuid: channel_waiting.uuid,
+              peer_number: channel_waiting.direction = "inbound" ? channel_waiting.calling_number : channel_waiting.called_number,
             }
             phone.parking_state[slot] = data;
           } else if(event_name == 'removed') {
