@@ -2,6 +2,31 @@
 
 const EventEmitter = require("events");
 
+function getRelativeParkPosition(absPosition, park_group) {
+  // Shared domain positions
+  if (absPosition >= 997 && absPosition <= 999) {
+    return absPosition - 993; // 997→4, 998→5, 999→6
+  }
+
+  // Validate range
+  if (absPosition < 901 || absPosition > 996) {
+    return null; // or throw error
+  }
+
+  // Base position for this group
+  var base = 901 + (park_group * 3);
+
+  // Calculate relative (1,2,3)
+  var relative = absPosition - base + 1;
+
+  // Ensure it's valid (belongs to this group)
+  if (relative < 1 || relative > 3) {
+    return null; // not part of this user's group
+  }
+
+  return relative;
+}
+
 module.exports = (function (env) {
   var SIP = require("sip.js");
 
@@ -431,16 +456,10 @@ module.exports = (function (env) {
     phone.args = args;
 
     phone.sessions = [];
-    for (var i = 0; i < phone.args.max_session; i++) {
-      phone.sessions[i] = {
-        id: i,
-        state: "idle",
-        peer_number: "",
-        peer_name: "",
-      };
-    }
 
     phone.audio_tags = [];
+
+    phone.parking_state = [];
 
     for (var id = 0; id < phone.args.max_sessions; id++) {
       var audioTag = document.createElement("audio");
@@ -473,35 +492,66 @@ module.exports = (function (env) {
 
       args.cti.on('info_event', ({element_name, info, event_name}) => {
         console.log("basix_webphone.js info_event", element_name, info, event_name)
-        if(element_name != "channel") return;
+        if(element_name == "channel") {
+          var channel = info;
 
-        var channel = info;
+          if(channel.user_id != phone.args.user_id) return;
 
-        if(channel.user_id != phone.args.user_id) return;
-
-        if(!channel.state) {
-          console.log("no state")
-          return
-        }
-
-        if(channel.called_number != "LOCAL_PARK") {
-          console.log("no LOCAL_PARK")
-          return
-        }
-
-        if(channel.direction != "outbound") {
-          console.log("no outbound")
-          return;
-        }
-
-        if(event_name == "updated") {
-          if(channel.state.name != "ringing") {
-            console.log("no ringing")
+          if(!channel.state) {
+            console.log("no state")
             return
           }
-          phone.addCtiIncomingCall(channel);
-        } else if(event_name == "removed") {
-          phone.removeCtiIncomingCall(channel);
+
+          if(channel.called_number != "LOCAL_PARK") {
+            console.log("no LOCAL_PARK")
+            return
+          }
+
+          if(channel.direction != "outbound") {
+            console.log("no outbound")
+            return;
+          }
+
+          if(event_name == "updated") {
+            if(channel.state.name != "ringing") {
+              console.log("no ringing")
+              return
+            }
+            phone.addCtiIncomingCall(channel);
+          } else if(event_name == "removed") {
+            phone.removeCtiIncomingCall(channel);
+          }
+        } else if(element_name == 'channel_waiting') {
+          var channel_waiting = info;
+
+          if(channel_waiting.state[1] != 'park') return;
+
+          var [park_timestamp, state_name, park_position, terminal_name, parker_user_id, parker_user_name] = channel_waiting.state;
+
+          var store = phone.args.cti.get_store()
+
+          var user = store['user'][phone.args.user_id];
+
+          var slot = getRelativeParkPosition(park_position, user.park_group)
+
+          if(!slot) return;
+
+          if(event_name == 'added') {
+            var parker = store['user'][parker_user_id];
+            var data = {
+              park_timestamp,
+              park_position,
+              end_user: channel_waiting.end_user,
+              user: channel_waiting.user,
+              parker,
+              uuid: channel_waiting.uuid,
+            }
+            phone.parking_state[slot] = data;
+          } else if(event_name == 'removed') {
+            phone.parking_state[slot] = null;
+          }
+
+          phone.emit('parking_state_change', phone.parking_state);
         }
       })
     }
