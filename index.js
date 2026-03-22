@@ -352,7 +352,14 @@ module.exports = (function (env) {
     var options = {
       extraHeaders: ["Referred-By: " + phone.args.user_name],
     };
-    session.refer(dest + "@basix", options);
+
+    if (typeof dest === 'string') {
+      // it's a string
+      session.refer(dest + "@basix", options);
+    } else if (typeof dest === 'object') {
+      // this would be a consultative/attended transfer. So dest is expected to contain the target session
+      session.refer(dest, options);
+    }
   };
 
   phone.toggleSlot = function (slot) {
