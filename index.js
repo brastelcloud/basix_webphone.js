@@ -2,6 +2,21 @@
 
 const EventEmitter = require("events");
 
+function setSessionPeer(session, channel) {
+  session.data['peer_address'] = channel.other_info.address;
+  var peer_info = channel.other_info;
+
+  if(peer_info.whoscall) {
+    var user = phone.args.cti.get_store()['user'][channel.user_id]
+    if(user.flags & 1024) {
+      peer_info.whoscall = JSON.parse(decodeURIComponent(peer_info.whoscall))
+    } else {
+      peer_info.whoscall = null
+    }
+  }
+  session.data['peer_info'] = peer_info;
+}
+
 function getRelativeParkPosition(absPosition, park_group) {
   // Shared domain positions
   if (absPosition >= 997 && absPosition <= 999) {
@@ -126,17 +141,8 @@ module.exports = (function (env) {
     session.data["state"] = "ringing";
     session.data["direction"] = "inbound";
     session.data["id"] = slot;
-    session.data['peer_address'] = channel.other_info.address;
-    var peer_info = channel.other_info;
-    if(peer_info.whoscall) {
-      var user = phone.args.cti.get_store()['user'][channel.user_id]
-      if(user.flags & 1024) {
-        peer_info.whoscall = JSON.parse(decodeURIComponent(peer_info.whoscall))
-      } else {
-        peer_info.whoscall = null
-      }
-    }
-    session.data['peer_info'] = peer_info;
+    setSessionPeer(session, channel)
+
     session.data["cti_channel"] = channel;
     phone.sessions[slot] = session;
 
@@ -325,12 +331,12 @@ module.exports = (function (env) {
   };
 
   phone.hold = function (slot) {
-    var session = phone.session[slot];
+    var session = phone.sessions[slot];
     session.hold();
   };
 
   phone.unhold = function (slot) {
-    var session = phone.session[slot];
+    var session = phone.sessions[slot];
     session.unhold();
   };
 
@@ -504,29 +510,42 @@ module.exports = (function (env) {
 
           if(channel.user_id != phone.args.user_id) return;
 
-          if(!channel.state) {
-            console.log("no state")
-            return
-          }
+          if(channel.called_number == "LOCAL_PARK") {
+            if(channel.direction != "outbound") {
+              console.log("no outbound")
+              return;
+            }
 
-          if(channel.called_number != "LOCAL_PARK") {
-            console.log("no LOCAL_PARK")
-            return
-          }
-
-          if(channel.direction != "outbound") {
-            console.log("no outbound")
-            return;
-          }
-
-          if(event_name == "updated") {
-            if(channel.state.name != "ringing") {
-              console.log("no ringing")
+            if(!channel.state) {
+              console.log("no state")
               return
             }
-            phone.addCtiIncomingCall(channel);
-          } else if(event_name == "removed") {
-            phone.removeCtiIncomingCall(channel);
+
+            if(event_name == "updated") {
+              if(channel.state.name != "ringing") {
+                console.log("no ringing")
+                return
+              }
+              phone.addCtiIncomingCall(channel);
+            } else if(event_name == "removed") {
+              phone.removeCtiIncomingCall(channel);
+            }
+          } else {
+            // Might be event for a channel for a webphone session.
+            var session = null
+            for (var i = 0; i < phone.args.max_sessions; ++i) {
+              if (phone.sessions[i] && phone.sessions[i].dialog && phone.sessions[i].dialog.id.call_id == channel.call_id) {
+                session = phone.sessions[i]
+                break
+              }
+            }
+
+            if(session) {
+              console.log("Updating WebPhone session. Before", session)
+              setSessionPeer(session, channel)
+              console.log("Updating WebPhone session. After", session)
+              phone.emit("session_update", session);
+            }
           }
         } else if(element_name == 'channel_waiting') {
           var channel_waiting = info;
