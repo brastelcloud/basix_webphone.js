@@ -550,25 +550,25 @@ module.exports = (function (env) {
         } else if(element_name == 'channel_waiting') {
           var channel_waiting = info;
 
-          if(channel_waiting.state[1] != 'park') return;
+          if(channel_waiting.state.name != 'park') return;
 
-          var [park_timestamp, state_name, park_position, terminal_name, parker_user_id, parker_user_name] = channel_waiting.state;
+          var state = channel_waiting.state;
 
           var store = phone.args.cti.get_store()
 
           var user = store['user'][phone.args.user_id];
 
-          var slot = getRelativeParkPosition(park_position, user.park_group)
+          var slot = getRelativeParkPosition(state.data.slot, user.park_group)
 
+          console.log("slot", slot);
           if(!slot) return;
 
           if(event_name == 'added') {
-            var parker = store['user'][parker_user_id];
+            var parker = store['user'][state.data.parker_id];
             var data = {
-              park_timestamp,
-              park_position,
+              park_timestamp: state.ts,
+              park_position: state.data.slot,
               end_user: channel_waiting.end_user,
-              user: channel_waiting.user,
               parker,
               uuid: channel_waiting.uuid,
               peer_number: channel_waiting.direction == "inbound" ? channel_waiting.calling_number : channel_waiting.called_number,
@@ -578,6 +578,7 @@ module.exports = (function (env) {
             phone.parking_state[slot] = null;
           }
 
+          console.log("emitting parking_state_change", event_name);
           phone.emit('parking_state_change', phone.parking_state);
         }
       })
