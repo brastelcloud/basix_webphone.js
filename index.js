@@ -191,7 +191,7 @@ module.exports = (function (env) {
 
     phone.removeCtiIncomingCall(session.data.channel);
 
-    phone.makeCall("pickup_uuid." + session.data.channel.other_uuid, {slot, peer_address: session.data.peer_address, peer_info: session.data.peer_info})
+    phone.makeCall("pickup_uuid." + session.data.channel.other_uuid, {slot, peer_address: session.data.peer_address, peer_info: session.data.peer_info, target: session.data.target})
   }
 
   phone.makeCall = function (destination, options = {}) {
@@ -330,6 +330,7 @@ module.exports = (function (env) {
     session.data["id"] = slot;
     session.data["peer_address"] = options.peer_address ? options.peer_address : destination;
     session.data['peer_info'] = options.peer_info;
+    session.data['target'] = options.target;
     phone.sessions[slot] = session;
 
     phone.emit("session_update", session);
