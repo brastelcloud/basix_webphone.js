@@ -143,7 +143,7 @@ module.exports = (function (env) {
     session.data["id"] = slot;
     setSessionPeer(session, channel)
 
-    session.data["cti_channel"] = channel;
+    session.data["channel"] = channel;
     phone.sessions[slot] = session;
 
     phone.emit("session_update", session);
@@ -156,7 +156,7 @@ module.exports = (function (env) {
     for (var i = 0; i < phone.args.max_sessions; ++i) {
       if (phone.sessions[i]) {
         var session = phone.sessions[i]
-        if(session.data.cti_channel && session.data.cti_channel.uuid == channel.uuid) {
+        if(session.data.channel && session.data.channel.uuid == channel.uuid) {
           foundSession = session
           break;
         }
@@ -182,11 +182,11 @@ module.exports = (function (env) {
       return;
     }
 
-    if(!session.data.cti_channel) return;
+    if(!session.data.channel) return;
 
-    phone.removeCtiIncomingCall(session.data.cti_channel);
+    phone.removeCtiIncomingCall(session.data.channel);
 
-    phone.makeCall("pickup_uuid." + session.data.cti_channel.other_uuid, {slot, peer_address: session.data.peer_address, peer_info: session.data.peer_info})
+    phone.makeCall("pickup_uuid." + session.data.channel.other_uuid, {slot, peer_address: session.data.peer_address, peer_info: session.data.peer_info})
   }
 
   phone.makeCall = function (destination, options = {}) {
@@ -389,7 +389,7 @@ module.exports = (function (env) {
       phone.emit("session_update", session);
     }
 
-    if (session.data["state"] == "ringing" && session.data.cti_channel) {
+    if (session.data["state"] == "ringing" && session.data.channel) {
       phone.answerCtiCall(slot)
     }
 
@@ -431,8 +431,8 @@ module.exports = (function (env) {
       return;
     }
 
-    if(session.data.cti_channel) {
-      phone.args.cti.hangup(session.data.cti_channel.uuid)
+    if(session.data.channel) {
+      phone.args.cti.hangup(session.data.channel.uuid)
     } else {
       session.terminate();
     }
