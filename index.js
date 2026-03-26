@@ -141,6 +141,11 @@ module.exports = (function (env) {
     session.data["state"] = "ringing";
     session.data["direction"] = "inbound";
     session.data["id"] = slot;
+    session.data["offer_timestamp"] = channel.offer_timestamp;
+    session.data["user_id"] = channel.user_id;
+    session.data["group_id"] = channel.group_id;
+    session.data["cti_state"] = channel.state;
+    session.data["target"] = channel.target;
     setSessionPeer(session, channel)
 
     session.data["channel"] = channel;
@@ -541,9 +546,9 @@ module.exports = (function (env) {
             }
 
             if(session) {
-              console.log("Updating WebPhone session. Before", session)
               setSessionPeer(session, channel)
-              console.log("Updating WebPhone session. After", session)
+              session.data["answer_timestamp"] = channel.answer_timestamp;
+              session.data["cti_state"] = channel.cti_state;
               phone.emit("session_update", session);
             }
           }
