@@ -2,11 +2,15 @@
 
 const EventEmitter = require("events");
 
-function setSessionPeer(session, channel) {
-  session.data['peer_address'] = channel.other_info.address;
+function setSessionPeer(phone, session, channel) {
+  if(channel.other_info) {
+    session.data['peer_address'] = channel.other_info.address;
+  } else {
+    session.data['peer_address'] = "---";
+  }
   var peer_info = channel.other_info;
 
-  if(peer_info.whoscall) {
+  if(peer_info && peer_info.whoscall) {
     var user = phone.args.cti.get_store()['user'][channel.user_id]
     if(user.flags & 1024) {
       peer_info.whoscall = JSON.parse(decodeURIComponent(peer_info.whoscall))
@@ -146,7 +150,7 @@ module.exports = (function (env) {
     session.data["group_id"] = channel.group_id;
     session.data["cti_state"] = channel.state;
     session.data["target"] = channel.target;
-    setSessionPeer(session, channel)
+    setSessionPeer(phone, session, channel)
 
     session.data["channel"] = channel;
     phone.sessions[slot] = session;
@@ -547,7 +551,7 @@ module.exports = (function (env) {
             }
 
             if(session) {
-              setSessionPeer(session, channel)
+              setSessionPeer(phone, session, channel)
               session.data["answer_timestamp"] = channel.answer_timestamp;
               session.data["cti_state"] = channel.cti_state;
               phone.emit("session_update", session);
@@ -571,6 +575,16 @@ module.exports = (function (env) {
 
           if(event_name == 'added') {
             var parker = store['user'][state.data.parker_id];
+
+            var whoscall = null;
+            if(channel_waiting.whoscall) {
+              if(user.flags & 1024) {
+                whoscall = JSON.parse(decodeURIComponent(channel_waiting.whoscall))
+              } else {
+                whoscall = null
+              }
+            }
+
             var data = {
               park_timestamp: state.ts,
               park_position: state.data.slot,
@@ -578,6 +592,7 @@ module.exports = (function (env) {
               parker,
               uuid: channel_waiting.uuid,
               peer_number: channel_waiting.direction == "inbound" ? channel_waiting.calling_number : channel_waiting.called_number,
+              whoscall,
             }
             phone.parking_state[slot] = data;
           } else if(event_name == 'removed') {
