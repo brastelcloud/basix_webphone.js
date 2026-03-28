@@ -476,6 +476,97 @@ module.exports = (function (env) {
     }
   };
 
+  phone.handle_info_event = function (element_name, info, event_name) {
+    console.log("basix_webphone.js info_event", element_name, info, event_name)
+    if(element_name == "channel") {
+      var channel = info;
+
+      if(channel.user_id != phone.args.user_id) return;
+
+      if(channel.called_number == "LOCAL_PARK") {
+        if(channel.direction != "outbound") {
+          console.log("no outbound")
+          return;
+        }
+
+        if(!channel.state) {
+          console.log("no state")
+          return
+        }
+
+        if(event_name == "updated") {
+          if(channel.state.name != "ringing") {
+            console.log("no ringing")
+            return
+          }
+          phone.addCtiIncomingCall(channel);
+        } else if(event_name == "removed") {
+          phone.removeCtiIncomingCall(channel);
+        }
+      } else {
+        // Might be event for a channel for a webphone session.
+        var session = null
+        for (var i = 0; i < phone.args.max_sessions; ++i) {
+          if (phone.sessions[i] && phone.sessions[i].dialog && phone.sessions[i].dialog.id.call_id == channel.call_id) {
+            session = phone.sessions[i]
+            break
+          }
+        }
+
+        if(session) {
+          setSessionPeer(phone, session, channel)
+          session.data["answer_timestamp"] = channel.answer_timestamp;
+          session.data["cti_state"] = channel.cti_state;
+          phone.emit("session_update", session);
+        }
+      }
+    } else if(element_name == 'channel_waiting') {
+      var channel_waiting = info;
+
+      if(channel_waiting.state.name != 'park') return;
+
+      var state = channel_waiting.state;
+
+      var store = phone.args.cti.get_store()
+
+      var user = store['user'][phone.args.user_id];
+
+      var slot = getRelativeParkPosition(state.data.slot, user.park_group)
+
+      console.log("slot", slot);
+      if(!slot) return;
+
+      if(event_name == 'added' || event_name == 'updated') {
+        var parker = store['user'][state.data.parker_id];
+
+        var whoscall = null;
+        if(channel_waiting.whoscall) {
+          if(user.flags & 1024) {
+            whoscall = JSON.parse(decodeURIComponent(channel_waiting.whoscall))
+          } else {
+            whoscall = null
+          }
+        }
+
+        var data = {
+          park_timestamp: state.ts,
+          park_position: state.data.slot,
+          end_user: channel_waiting.end_user,
+          parker,
+          uuid: channel_waiting.uuid,
+          peer_number: channel_waiting.direction == "inbound" ? channel_waiting.calling_number : channel_waiting.called_number,
+          whoscall,
+        }
+        phone.parking_state[slot] = data;
+      } else if(event_name == 'removed') {
+        phone.parking_state[slot] = null;
+      }
+
+      console.log("emitting parking_state_change", event_name);
+      phone.emit('parking_state_change', phone.parking_state);
+    }
+  }
+
   phone.init = function (args) {
     console.log("WebPhone init");
     console.dir(args);
@@ -519,98 +610,14 @@ module.exports = (function (env) {
       })
 
       args.cti.on('initial_info', ({element_name, data}) => {
-        // TODO
+        Object.keys(data).forEach(key => {
+          var info = data[key];
+          phone.handle_info_event(element_name, info, "updated");
+        })
       })
 
       args.cti.on('info_event', ({element_name, info, event_name}) => {
-        console.log("basix_webphone.js info_event", element_name, info, event_name)
-        if(element_name == "channel") {
-          var channel = info;
-
-          if(channel.user_id != phone.args.user_id) return;
-
-          if(channel.called_number == "LOCAL_PARK") {
-            if(channel.direction != "outbound") {
-              console.log("no outbound")
-              return;
-            }
-
-            if(!channel.state) {
-              console.log("no state")
-              return
-            }
-
-            if(event_name == "updated") {
-              if(channel.state.name != "ringing") {
-                console.log("no ringing")
-                return
-              }
-              phone.addCtiIncomingCall(channel);
-            } else if(event_name == "removed") {
-              phone.removeCtiIncomingCall(channel);
-            }
-          } else {
-            // Might be event for a channel for a webphone session.
-            var session = null
-            for (var i = 0; i < phone.args.max_sessions; ++i) {
-              if (phone.sessions[i] && phone.sessions[i].dialog && phone.sessions[i].dialog.id.call_id == channel.call_id) {
-                session = phone.sessions[i]
-                break
-              }
-            }
-
-            if(session) {
-              setSessionPeer(phone, session, channel)
-              session.data["answer_timestamp"] = channel.answer_timestamp;
-              session.data["cti_state"] = channel.cti_state;
-              phone.emit("session_update", session);
-            }
-          }
-        } else if(element_name == 'channel_waiting') {
-          var channel_waiting = info;
-
-          if(channel_waiting.state.name != 'park') return;
-
-          var state = channel_waiting.state;
-
-          var store = phone.args.cti.get_store()
-
-          var user = store['user'][phone.args.user_id];
-
-          var slot = getRelativeParkPosition(state.data.slot, user.park_group)
-
-          console.log("slot", slot);
-          if(!slot) return;
-
-          if(event_name == 'added') {
-            var parker = store['user'][state.data.parker_id];
-
-            var whoscall = null;
-            if(channel_waiting.whoscall) {
-              if(user.flags & 1024) {
-                whoscall = JSON.parse(decodeURIComponent(channel_waiting.whoscall))
-              } else {
-                whoscall = null
-              }
-            }
-
-            var data = {
-              park_timestamp: state.ts,
-              park_position: state.data.slot,
-              end_user: channel_waiting.end_user,
-              parker,
-              uuid: channel_waiting.uuid,
-              peer_number: channel_waiting.direction == "inbound" ? channel_waiting.calling_number : channel_waiting.called_number,
-              whoscall,
-            }
-            phone.parking_state[slot] = data;
-          } else if(event_name == 'removed') {
-            phone.parking_state[slot] = null;
-          }
-
-          console.log("emitting parking_state_change", event_name);
-          phone.emit('parking_state_change', phone.parking_state);
-        }
+        phone.handle_info_event(element_name, info, event_name)
       })
     }
 
