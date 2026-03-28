@@ -251,7 +251,7 @@ module.exports = (function (env) {
         phone.emit("session_update", session);
       } else if(response.status_code == 180) {
         // In this case the UI should play ringback tone
-        session.data["state"] = "ringing";
+        session.data["state"] = "alerting";
         phone.emit("session_update", session);
       }
     });
