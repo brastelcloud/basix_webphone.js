@@ -283,33 +283,22 @@ module.exports = (function (env) {
       console.log(
         "WebPhone slot=" + slot + " got event 'failed' with cause=" + cause,
       );
-      session.data["state"] = "terminated";
-      phone.emit("session_update", session);
     });
 
     session.on("terminated", function (message, cause) {
       console.log(
         "WebPhone slot=" + slot + " got event 'terminated' with cause=" + cause,
       );
-      session.data["state"] = "terminated";
-      phone.emit("session_update", session); // Emit terminated state immediately
-      var sessionId = session.data["id"];
-
-      // Delay setting to 'idle' and then deleting
-      setTimeout(() => {
-        console.log("WebPhone: Setting session to 'idle' for ID:", sessionId);
-        // Create a new object for the 'idle' state to avoid issues with the original session object being terminated
-        var idleSession = {
-          data: {
-            id: sessionId,
-            state: "idle",
-            // Preserve other relevant data for display if necessary.
-            peer_address: session.data["peer_address"],
-          },
-        };
-        phone.emit("session_update", idleSession); // Emit idle state
-        delete phone.sessions[sessionId]; // Finally delete the session
-      }, 5000);
+      var idleSession = {
+        data: {
+          id: session.data.id,
+          state: "idle",
+          // Preserve other relevant data for display if necessary.
+          peer_address: session.data["peer_address"],
+        },
+      };
+      phone.emit("session_update", idleSession); // Emit idle state
+      delete phone.sessions[session.data.id]; // Finally delete the session
     });
 
     session.on("cancel", function () {
