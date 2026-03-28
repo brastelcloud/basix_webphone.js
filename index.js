@@ -245,6 +245,15 @@ module.exports = (function (env) {
 
     session.on("progress", function (response) {
       console.log("WebPhone slot=" + slot + " got event 'progress'", response);
+      if (response.status_code === 183 && response.body) {
+          this.createDialog(response, 'UAC');
+          var the_session = this;
+          this.sessionDescriptionHandler.setDescription(response.body).then(function() {
+              the_session.status = 11; //C.STATUS_EARLY_MEDIA;
+              the_session.hasAnswer = true;
+          });
+      }
+
       if(response.body) {
         // Early media (180 or 183 with SDP)
         session.data["state"] = "progress";
