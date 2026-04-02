@@ -3,10 +3,21 @@
 const EventEmitter = require("events");
 
 function setSessionPeer(phone, session, channel) {
+  console.log("setSessionPeer", session.data.peer_address, channel)
   if(channel.other_info) {
     session.data['peer_address'] = channel.other_info.address;
   } else {
-    session.data['peer_address'] = "---";
+    if(!session.data['peer_address']) {
+      if(channel.direction == 'inbound') {
+        session.data['peer_address'] = channel.calling_number;
+      } else {
+        if(channel.called_number.startsWith("pickup_uuid.")) {
+          session.data['peer_address'] = '';
+        } else {
+          session.data['peer_address'] = channel.called_number;
+        }
+      }
+    }
   }
   var peer_info = channel.other_info;
 
