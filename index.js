@@ -270,9 +270,13 @@
           session.data["state"] = "progress";
           phone.emit("session_update", session);
         } else if(response.status_code == 180) {
-          // In this case the UI should play ringback tone
-          session.data["state"] = "alerting";
-          phone.emit("session_update", session);
+          if(session.data["state"] != "progress") {
+            // should not switch to alerting if we already got 183 Session Progress.
+
+            // If we didn't get progress, UI should play ringback tone
+            session.data["state"] = "alerting";
+            phone.emit("session_update", session);
+          }
         }
       });
 
