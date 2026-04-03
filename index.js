@@ -385,7 +385,7 @@
           return;
         }
         CTI.transfer(session.data.channel.other_uuid, phone.args.user_id, phone.args.user_name, dest)
-      } else if(session.data['state'] == 'talking') {
+      } else if(['talking', 'on hold'].includes(session.data['state'])) {
         var options = {
           extraHeaders: ["Referred-By: " + phone.args.user_name],
         };
