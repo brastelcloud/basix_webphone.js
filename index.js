@@ -210,6 +210,7 @@
     }
 
     phone.makeCall = function (destination, options = {}) {
+      console.log("phone.makeCall", destination, options)
       if (!phone.isConnected) {
         console.log("Cannot make call as ua is not connected");
         phone.emit('error', 'not_connected')
@@ -256,7 +257,7 @@
 
       session.on("progress", function (response) {
         console.log("WebPhone slot=" + slot + " got event 'progress'", response);
-        if (response.status_code === 183 && response.body) {
+        if (response.statusCode === 183 && response.body) {
             this.createDialog(response, 'UAC');
             var the_session = this;
             this.sessionDescriptionHandler.setDescription(response.body).then(function() {
@@ -269,7 +270,7 @@
           // Early media (180 or 183 with SDP)
           session.data["state"] = "progress";
           phone.emit("session_update", session);
-        } else if(response.status_code == 180) {
+        } else if(response.statusCode == 180) {
           if(session.data["state"] != "progress") {
             // should not switch to alerting if we already got 183 Session Progress.
 
@@ -520,7 +521,7 @@
         // Might be event for a channel for a webphone session.
         var session = null
         for (var i = 0; i < phone.args.max_sessions; ++i) {
-          if (phone.sessions[i] && phone.sessions[i].dialog && phone.sessions[i].dialog.id.call_id == channel.call_id) {
+          if (phone.sessions[i] && phone.sessions[i].dialog && phone.sessions[i].dialog.id.callId == channel.call_id) {
             session = phone.sessions[i]
             break
           }
