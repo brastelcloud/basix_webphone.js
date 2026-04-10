@@ -3,25 +3,24 @@
   const EventEmitter = require("events");
 
   function setSessionPeer(phone, session, channel) {
-    console.log("setSessionPeer", session.data.peer_address, channel)
+    var peer_info
     if(channel.other_info) {
-      session.data['peer_address'] = channel.other_info.address;
+      peer_info = channel.other_info
     } else {
-      if(!session.data['peer_address']) {
-        if(channel.direction == 'inbound') {
-          session.data['peer_address'] = channel.calling_number;
+      var address;
+      if(channel.direction == 'inbound') {
+        address = channel.calling_number;
+      } else {
+        if(channel.called_number.startsWith("pickup_uuid.")) {
+          address = '';
         } else {
-          if(channel.called_number.startsWith("pickup_uuid.")) {
-            session.data['peer_address'] = '';
-          } else {
-            session.data['peer_address'] = channel.called_number;
-          }
+          address = channel.called_number;
         }
       }
+      peer_info = { address }
     }
-    var peer_info = channel.other_info;
 
-    if(peer_info && peer_info.whoscall) {
+    if(peer_info.whoscall) {
       var user = phone.args.cti.get_store()['user'][channel.user_id]
       if(user.flags & 1024) {
         peer_info.whoscall = JSON.parse(decodeURIComponent(peer_info.whoscall))
@@ -29,7 +28,8 @@
         peer_info.whoscall = null
       }
     }
-    session.data['peer_info'] = peer_info;
+
+    session.data['peer_info'] = peer_info
   }
 
   function getRelativeParkPosition(absPosition, park_group) {
@@ -206,7 +206,7 @@
 
       phone.removeCtiIncomingCall(session.data.channel);
 
-      phone.makeCall("pickup_uuid." + session.data.channel.other_uuid, {slot, peer_address: session.data.peer_address, peer_info: session.data.peer_info, target: session.data.target})
+      phone.makeCall("pickup_uuid." + session.data.channel.other_uuid, {slot, peer_info: session.data.peer_info, target: session.data.target})
     }
 
     phone.makeCall = function (destination, options = {}) {
@@ -309,8 +309,6 @@
           data: {
             id: session.data.id,
             state: "idle",
-            // Preserve other relevant data for display if necessary.
-            peer_address: session.data["peer_address"],
           },
         };
         phone.emit("session_update", idleSession); // Emit idle state
@@ -346,7 +344,6 @@
       session.data["state"] = "calling";
       session.data["direction"] = "outbound";
       session.data["id"] = slot;
-      session.data["peer_address"] = options.peer_address ? options.peer_address : destination;
       session.data['peer_info'] = options.peer_info;
       session.data['target'] = options.target;
       phone.sessions[slot] = session;
