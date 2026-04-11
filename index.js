@@ -3,6 +3,7 @@
   const EventEmitter = require("events");
 
   function setSessionPeer(phone, session, channel) {
+    console.log("setSessionPeer", session, channel)
     var peer_info
     if(channel.other_info) {
       peer_info = channel.other_info
@@ -17,6 +18,29 @@
           address = channel.called_number;
         }
       }
+      peer_info = { address }
+    }
+
+    if(peer_info.whoscall) {
+      var user = phone.args.cti.get_store()['user'][channel.user_id]
+      if(user.flags & 1024) {
+        peer_info.whoscall = JSON.parse(decodeURIComponent(peer_info.whoscall))
+      } else {
+        peer_info.whoscall = null
+      }
+    }
+
+    session.data['peer_info'] = peer_info
+  }
+
+  function setSessionPeerOutgoing(phone, session, channel) {
+    console.log("setSessionPeerOutgoing", session, channel)
+    var peer_info
+    if(channel.other_info) {
+      peer_info = channel.other_info
+    } else {
+      var address;
+      address = channel.called_number;
       peer_info = { address }
     }
 
@@ -344,10 +368,22 @@
       session.data["state"] = "calling";
       session.data["direction"] = "outbound";
       session.data["id"] = slot;
-      session.data['peer_info'] = options.peer_info;
+
+      if(options.peer_info) {
+        session.data['peer_info'] = options.peer_info;
+      } else {
+        var peer_info = {address: destination};
+        session.data.peer_info = peer_info;
+        console.log("peer_info", peer_info);
+        console.log('session.data.peer_info', session.data.peer_info)
+      }
+
       session.data['target'] = options.target;
       phone.sessions[slot] = session;
 
+      console.log("emitting session_update", destination, session);
+      console.log('session.data', session.data)
+      console.log('session.data.peer_info', session.data.peer_info)
       phone.emit("session_update", session);
     };
 
@@ -525,7 +561,8 @@
         }
 
         if(session) {
-          setSessionPeer(phone, session, channel)
+          console.log("found session", session)
+          setSessionPeerOutgoing(phone, session, channel)
           session.data["answer_timestamp"] = channel.answer_timestamp;
           session.data["cti_state"] = channel.cti_state;
           phone.emit("session_update", session);
