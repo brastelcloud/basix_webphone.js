@@ -1,438 +1,453 @@
-  "use strict";
+"use strict";
 
-  const EventEmitter = require("events");
+const EventEmitter = require("events");
 
-  function setSessionPeer(phone, session, channel) {
-    console.log("setSessionPeer", session, channel)
-    var peer_info
-    if(channel.other_info) {
-      peer_info = channel.other_info
-    } else {
-      var address;
-      if(channel.direction == 'inbound') {
-        address = channel.calling_number;
-      } else {
-        if(channel.called_number.startsWith("pickup_uuid.")) {
-          address = '';
-        } else {
-          address = channel.called_number;
-        }
-      }
-      peer_info = { address }
+function safeStringify(obj) {
+  const seen = new WeakSet();
+  return JSON.stringify(obj, (key, value) => {
+    if (typeof value === "object" && value !== null) {
+      if (seen.has(value)) return "[Circular]";
+      seen.add(value);
     }
+    return value;
+  }, 2);
+}
 
-    if(peer_info.whoscall) {
-      var user = phone.args.cti.get_store()['user'][channel.user_id]
-      if(user.flags & 1024) {
-        peer_info.whoscall = JSON.parse(decodeURIComponent(peer_info.whoscall))
-      } else {
-        peer_info.whoscall = null
-      }
-    }
+function dump(obj) {
+  console.log(safeStringify(obj))
+}
 
-    session.data['peer_info'] = peer_info
-  }
-
-  function setSessionPeerOutgoing(phone, session, channel) {
-    console.log("setSessionPeerOutgoing", session, channel)
-    var peer_info
-    if(channel.other_info) {
-      peer_info = channel.other_info
+function setSessionPeer(phone, session, channel) {
+  console.log("setSessionPeer")
+  dump([session.data, channel])
+  var peer_info
+  if(channel.other_info) {
+    peer_info = channel.other_info
+  } else {
+    var address;
+    if(channel.direction == 'inbound') {
+      address = channel.calling_number;
     } else {
-      var address = "";
-      if(!channel.called_number.startsWith("pickup_uuid.")) {
+      if(channel.called_number.startsWith("pickup_uuid.")) {
+        address = '';
+      } else {
         address = channel.called_number;
       }
-      peer_info = { address }
     }
+    peer_info = { address }
+  }
 
-    if(peer_info.whoscall) {
-      var user = phone.args.cti.get_store()['user'][channel.user_id]
-      if(user.flags & 1024) {
-        peer_info.whoscall = JSON.parse(decodeURIComponent(peer_info.whoscall))
-      } else {
-        peer_info.whoscall = null
+  if(peer_info.whoscall) {
+    var user = phone.args.cti.get_store()['user'][channel.user_id]
+    if(user.flags & 1024) {
+      peer_info.whoscall = JSON.parse(decodeURIComponent(peer_info.whoscall))
+    } else {
+      peer_info.whoscall = null
+    }
+  }
+
+  session.data['peer_info'] = peer_info
+}
+
+function setSessionPeerOutgoing(phone, session, channel) {
+  console.log("setSessionPeerOutgoing")
+  dump([session.data, channel])
+  var peer_info
+  if(channel.other_info) {
+    peer_info = channel.other_info
+  } else {
+    var address = "";
+    if(!channel.called_number.startsWith("pickup_uuid.")) {
+      address = channel.called_number;
+    }
+    peer_info = { address }
+  }
+
+  if(peer_info.whoscall) {
+    var user = phone.args.cti.get_store()['user'][channel.user_id]
+    if(user.flags & 1024) {
+      peer_info.whoscall = JSON.parse(decodeURIComponent(peer_info.whoscall))
+    } else {
+      peer_info.whoscall = null
+    }
+  }
+
+  session.data['peer_info'] = peer_info
+}
+
+function getRelativeParkPosition(absPosition, park_group) {
+  // Shared domain positions
+  if (absPosition >= 997 && absPosition <= 999) {
+    return absPosition - 993; // 997→4, 998→5, 999→6
+  }
+
+  // Validate range
+  if (absPosition < 901 || absPosition > 996) {
+    return null; // or throw error
+  }
+
+  // Base position for this group
+  var base = 901 + (park_group * 3);
+
+  // Calculate relative (1,2,3)
+  var relative = absPosition - base + 1;
+
+  // Ensure it's valid (belongs to this group)
+  if (relative < 1 || relative > 3) {
+    return null; // not part of this user's group
+  }
+
+  return relative;
+}
+
+module.exports = (function (env) {
+  var SIP = require("sip.js");
+
+  var phone = new Object();
+  Object.assign(phone, EventEmitter.prototype);
+
+  var process_ws_disconnection = function () {
+    if (!phone.ua) return;
+
+    phone.ua.stop();
+    delete phone.ua;
+    phone.emit("stopped");
+  };
+
+  phone._startUA = function () {
+    console.log("WebPhone._startUA: begin");
+    phone.isConnected = false;
+
+    phone.ua = new SIP.UA({
+      //uri: "ws_sip_" + phone.args.user_name + "@" + phone.args.domain_name,
+      uri: phone.args.user_name + "@" + phone.args.domain_name,
+      transportOptions: {
+        wsServers: ["wss://" + phone.args.app_cname + "/basix/api/ws_sip"],
+        maxReconnectionAttempts: 0,
+        connectionTimeout: 10000,
+      },
+      register: false,
+      registerExpires: 100,
+      noAnswerTimeout: 180,
+      autostart: false,
+      sessionDescriptionHandlerFactoryOptions: {
+        constraints: {
+          audio: true,
+          video: false,
+        },
+        peerConnectionOptions: {
+          iceCheckingTimeout: 500,
+        },
+      },
+    });
+
+    console.log("Registering to transportCreated");
+    phone.ua.on("transportCreated", function (transport) {
+      console.log("transportCreated");
+
+      transport.on("connected", function () {
+        console.log("transport connected");
+        phone.isConnected = true;
+      });
+
+      transport.on("transportError", function () {
+        console.log("transportError");
+        phone.isConnected = false;
+        process_ws_disconnection();
+      });
+
+      transport.on("disconnected", function () {
+        console.log("transport disconnected");
+        phone.isConnected = false;
+        process_ws_disconnection();
+      });
+    });
+
+    phone.ua.on("unregistered", function () {
+      console.log("WebPhone: unregistered");
+      phone.ua.stop();
+      delete phone.ua;
+      phone.stopped();
+    });
+
+    phone.ua.start();
+    console.log("WebPhone._startUA: end");
+  };
+
+  phone.addCtiIncomingCall = function(channel) {
+    console.log("addCtiIncomingCall")
+    dump(channel)
+
+    var slot = null;
+    for (var i = 0; i < phone.args.max_sessions; ++i) {
+      if (!phone.sessions[i]) {
+        console.log("slot " + i + " OK");
+        slot = i;
+        break;
       }
     }
 
-    session.data['peer_info'] = peer_info
+    if(slot == null) {
+      console.log("No free slot for incoming call")
+      return
+    }
+
+    // Fake session
+    var session = {data: {}}
+
+    session.data["state"] = "ringing";
+    session.data["direction"] = "inbound";
+    session.data["id"] = slot;
+    session.data["offer_timestamp"] = channel.offer_timestamp;
+    session.data["user_id"] = channel.user_id;
+    session.data["group_id"] = channel.group_id;
+    session.data["cti_state"] = channel.state;
+    session.data["target"] = channel.target;
+    setSessionPeer(phone, session, channel)
+
+    session.data["channel"] = channel;
+    phone.sessions[slot] = session;
+
+    phone.emit("session_update", session);
   }
 
-  function getRelativeParkPosition(absPosition, park_group) {
-    // Shared domain positions
-    if (absPosition >= 997 && absPosition <= 999) {
-      return absPosition - 993; // 997→4, 998→5, 999→6
+  phone.removeCtiIncomingCall = function(channel) {
+    console.log("removeCtiIncomingCall")
+    dump(channel)
+    dump(phone.sessions)
+    var foundSession = null;
+    for (var i = 0; i < phone.args.max_sessions; ++i) {
+      if (phone.sessions[i]) {
+        var session = phone.sessions[i]
+        if(session.data.channel && session.data.channel.uuid == channel.uuid) {
+          foundSession = session
+          break;
+        }
+      }
     }
 
-    // Validate range
-    if (absPosition < 901 || absPosition > 996) {
-      return null; // or throw error
+    if(foundSession == null) {
+      console.log("Incoming call not found")
+      return
     }
 
-    // Base position for this group
-    var base = 901 + (park_group * 3);
+    foundSession.data.state = "idle"
 
-    // Calculate relative (1,2,3)
-    var relative = absPosition - base + 1;
-
-    // Ensure it's valid (belongs to this group)
-    if (relative < 1 || relative > 3) {
-      return null; // not part of this user's group
-    }
-
-    return relative;
+    phone.emit("session_update", foundSession); // Emit idle state
+    delete phone.sessions[foundSession.data.id]; // Finally delete the session
   }
 
-  module.exports = (function (env) {
-    var SIP = require("sip.js");
+  phone.answerCtiCall = function(slot) {
+    console.log("WebPhone answerCtiCall");
+    var session = phone.sessions[slot];
+    if (!session) {
+      console.log("No session at slot " + slot);
+      return;
+    }
 
-    var phone = new Object();
-    Object.assign(phone, EventEmitter.prototype);
+    if(!session.data.channel) return;
 
-    var process_ws_disconnection = function () {
-      if (!phone.ua) return;
+    phone.removeCtiIncomingCall(session.data.channel);
 
-      phone.ua.stop();
-      delete phone.ua;
-      phone.emit("stopped");
-    };
+    phone.makeCall("pickup_uuid." + session.data.channel.other_uuid, {slot, peer_info: session.data.peer_info, target: session.data.target})
+  }
 
-    phone._startUA = function () {
-      console.log("WebPhone._startUA: begin");
-      phone.isConnected = false;
+  phone.makeCall = function (destination, options = {}) {
+    console.log("phone.makeCall")
+    dump(destination, options)
+    if (!phone.isConnected) {
+      console.log("Cannot make call as ua is not connected");
+      phone.emit('error', 'not_connected')
+      return false;
+    }
 
-      phone.ua = new SIP.UA({
-        //uri: "ws_sip_" + phone.args.user_name + "@" + phone.args.domain_name,
-        uri: phone.args.user_name + "@" + phone.args.domain_name,
-        transportOptions: {
-          wsServers: ["wss://" + phone.args.app_cname + "/basix/api/ws_sip"],
-          maxReconnectionAttempts: 0,
-          connectionTimeout: 10000,
-        },
-        register: false,
-        registerExpires: 100,
-        noAnswerTimeout: 180,
-        autostart: false,
-        sessionDescriptionHandlerFactoryOptions: {
-          constraints: {
-            audio: true,
-            video: false,
-          },
-          peerConnectionOptions: {
-            iceCheckingTimeout: 500,
-          },
-        },
-      });
-
-      console.log("Registering to transportCreated");
-      phone.ua.on("transportCreated", function (transport) {
-        console.log("transportCreated");
-
-        transport.on("connected", function () {
-          console.log("transport connected");
-          phone.isConnected = true;
-        });
-
-        transport.on("transportError", function () {
-          console.log("transportError");
-          phone.isConnected = false;
-          process_ws_disconnection();
-        });
-
-        transport.on("disconnected", function () {
-          console.log("transport disconnected");
-          phone.isConnected = false;
-          process_ws_disconnection();
-        });
-      });
-
-      phone.ua.on("unregistered", function () {
-        console.log("WebPhone: unregistered");
-        phone.ua.stop();
-        delete phone.ua;
-        phone.stopped();
-      });
-
-      phone.ua.start();
-      console.log("WebPhone._startUA: end");
-    };
-
-    phone.addCtiIncomingCall = function(channel) {
-      console.log("addCtiIncomingCall", channel)
-
-      var slot = null;
+    var slot = options.slot;
+    if(!slot) {
       for (var i = 0; i < phone.args.max_sessions; ++i) {
         if (!phone.sessions[i]) {
           console.log("slot " + i + " OK");
           slot = i;
           break;
-        } else {
-          console.dir(phone.sessions[i]);
         }
       }
+    }
 
-      if(slot == null) {
-        console.log("No free slot for incoming call")
-        return
+    if (slot == null) {
+      console.log("All slots in use");
+      phone.emit('error', 'all_slots_in_use')
+      return false;
+    }
+
+    if(phone.sessions[slot]) {
+      console.log(`slot=${slot} in use`)
+      return
+    }
+
+    var call_options = {
+      media: {
+        constraints: {
+          audio: true,
+          video: false,
+        },
+        render: {
+          remote: phone.audio_tags[slot],
+        },
+      },
+    };
+
+    var session = phone.ua.invite("sip:" + destination + "@anything", call_options);
+
+    session.on("progress", function (response) {
+      console.log("WebPhone slot=" + slot + " got event 'progress'")
+      dump(response.data);
+      if (response.statusCode === 183 && response.body) {
+          this.createDialog(response, 'UAC');
+          var the_session = this;
+          this.sessionDescriptionHandler.setDescription(response.body).then(function() {
+              the_session.status = 11; //C.STATUS_EARLY_MEDIA;
+              the_session.hasAnswer = true;
+          });
       }
 
-      // Fake session
-      var session = {data: {}}
+      if(response.body) {
+        // Early media (180 or 183 with SDP)
+        session.data["state"] = "progress";
+        phone.emit("session_update", session);
+      } else if(response.statusCode == 180) {
+        if(session.data["state"] != "progress") {
+          // should not switch to alerting if we already got 183 Session Progress.
 
-      session.data["state"] = "ringing";
-      session.data["direction"] = "inbound";
-      session.data["id"] = slot;
-      session.data["offer_timestamp"] = channel.offer_timestamp;
-      session.data["user_id"] = channel.user_id;
-      session.data["group_id"] = channel.group_id;
-      session.data["cti_state"] = channel.state;
-      session.data["target"] = channel.target;
-      setSessionPeer(phone, session, channel)
+          // If we didn't get progress, UI should play ringback tone
+          session.data["state"] = "alerting";
+          phone.emit("session_update", session);
+        }
+      }
+    });
 
-      session.data["channel"] = channel;
-      phone.sessions[slot] = session;
-
+    session.on("accepted", function (response) {
+      console.log("WebPhone slot=" + slot + " got event 'accepted'")
+      dump(response.data);
+      session.data["state"] = "talking";
       phone.emit("session_update", session);
-    }
+      phone.holdOtherSessions(slot);
+      phone.hangupMediaPlugSession();
+    });
 
-    phone.removeCtiIncomingCall = function(channel) {
-      console.log("removeCtiIncomingCall", channel)
-      console.log(phone.sessions)
-      var foundSession = null;
-      for (var i = 0; i < phone.args.max_sessions; ++i) {
-        if (phone.sessions[i]) {
-          var session = phone.sessions[i]
-          if(session.data.channel && session.data.channel.uuid == channel.uuid) {
-            foundSession = session
-            break;
-          }
-        }
-      }
+    session.on("rejected", function (response, cause) {
+      console.log("WebPhone slot=" + slot + " got event 'rejected'");
+      session.data["state"] = "rejected";
+      phone.emit("session_update", session);
+    });
 
-      if(foundSession == null) {
-        console.log("Incoming call not found")
-        return
-      }
+    session.on("failed", function (response, cause) {
+      console.log("WebPhone slot=" + slot + " got event 'failed' with cause=" + cause);
+    });
 
-      foundSession.data.state = "idle"
-
-      phone.emit("session_update", foundSession); // Emit idle state
-      delete phone.sessions[foundSession.data.id]; // Finally delete the session
-    }
-
-    phone.answerCtiCall = function(slot) {
-      console.log("WebPhone answerCtiCall");
-      var session = phone.sessions[slot];
-      if (!session) {
-        console.log("No session at slot " + slot);
-        return;
-      }
-
-      if(!session.data.channel) return;
-
-      phone.removeCtiIncomingCall(session.data.channel);
-
-      phone.makeCall("pickup_uuid." + session.data.channel.other_uuid, {slot, peer_info: session.data.peer_info, target: session.data.target})
-    }
-
-    phone.makeCall = function (destination, options = {}) {
-      console.log("phone.makeCall", destination, options)
-      if (!phone.isConnected) {
-        console.log("Cannot make call as ua is not connected");
-        phone.emit('error', 'not_connected')
-        return false;
-      }
-
-      var slot = options.slot;
-      if(!slot) {
-        for (var i = 0; i < phone.args.max_sessions; ++i) {
-          if (!phone.sessions[i]) {
-            console.log("slot " + i + " OK");
-            slot = i;
-            break;
-          } else {
-            console.dir(phone.sessions[i]);
-          }
-        }
-      }
-
-      if (slot == null) {
-        console.log("All slots in use");
-        phone.emit('error', 'all_slots_in_use')
-        return false;
-      }
-
-      if(phone.sessions[slot]) {
-        console.log(`slot=${slot} in use`)
-        return
-      }
-
-      var call_options = {
-        media: {
-          constraints: {
-            audio: true,
-            video: false,
-          },
-          render: {
-            remote: phone.audio_tags[slot],
-          },
+    session.on("terminated", function (message, cause) {
+      console.log("WebPhone slot=" + slot + " got event 'terminated' with cause=" + cause);
+      var idleSession = {
+        data: {
+          id: session.data.id,
+          state: "idle",
         },
       };
+      phone.emit("session_update", idleSession); // Emit idle state
+      delete phone.sessions[session.data.id]; // Finally delete the session
+    });
 
-      var session = phone.ua.invite("sip:" + destination + "@anything", call_options);
-
-      session.on("progress", function (response) {
-        console.log("WebPhone slot=" + slot + " got event 'progress'", response);
-        if (response.statusCode === 183 && response.body) {
-            this.createDialog(response, 'UAC');
-            var the_session = this;
-            this.sessionDescriptionHandler.setDescription(response.body).then(function() {
-                the_session.status = 11; //C.STATUS_EARLY_MEDIA;
-                the_session.hasAnswer = true;
-            });
-        }
-
-        if(response.body) {
-          // Early media (180 or 183 with SDP)
-          session.data["state"] = "progress";
-          phone.emit("session_update", session);
-        } else if(response.statusCode == 180) {
-          if(session.data["state"] != "progress") {
-            // should not switch to alerting if we already got 183 Session Progress.
-
-            // If we didn't get progress, UI should play ringback tone
-            session.data["state"] = "alerting";
-            phone.emit("session_update", session);
-          }
-        }
-      });
-
-      session.on("accepted", function (data) {
-        console.log("WebPhone slot=" + slot + " got event 'accepted'", data);
-        session.data["state"] = "talking";
-        phone.emit("session_update", session);
-        phone.holdOtherSessions(slot);
-        phone.hangupMediaPlugSession();
-      });
-
-      session.on("rejected", function (response, cause) {
-        console.log("WebPhone slot=" + slot + " got event 'rejected'");
-        session.data["state"] = "rejected";
-        phone.emit("session_update", session);
-      });
-
-      session.on("failed", function (response, cause) {
-        console.log(
-          "WebPhone slot=" + slot + " got event 'failed' with cause=" + cause,
-        );
-      });
-
-      session.on("terminated", function (message, cause) {
-        console.log(
-          "WebPhone slot=" + slot + " got event 'terminated' with cause=" + cause,
-        );
-        var idleSession = {
-          data: {
-            id: session.data.id,
-            state: "idle",
-          },
-        };
-        phone.emit("session_update", idleSession); // Emit idle state
-        delete phone.sessions[session.data.id]; // Finally delete the session
-      });
-
-      session.on("cancel", function () {
-        console.log("WebPhone slot=" + slot + " got event 'cancel'");
-        session.data["state"] = "cancel";
-        phone.emit("session_update", session);
-      });
-
-      session.on("bye", function (request) {
-        console.log("WebPhone slot=" + slot + " got event 'bye'");
-      });
-
-      session.on("trackAdded", function () {
-        console.log("trackAdded");
-        var audio = phone.audio_tags[slot];
-        console.dir(audio);
-
-        var pc = session.sessionDescriptionHandler.peerConnection;
-
-        // Gets remote tracks
-        var remoteStream = new MediaStream();
-        pc.getReceivers().forEach(function (receiver) {
-          remoteStream.addTrack(receiver.track);
-        });
-        audio.srcObject = remoteStream;
-        audio.play();
-      });
-
-      session.data["state"] = "calling";
-      session.data["direction"] = "outbound";
-      session.data["id"] = slot;
-
-      if(options.peer_info) {
-        session.data.peer_info = options.peer_info;
-      } else {
-        var address = "";
-        if(!destination.startsWith("pickup_uuid.")) {
-          address = destination;
-        }
-        var peer_info = {address: destination};
-        session.data.peer_info = peer_info;
-      }
-
-      session.data['target'] = options.target;
-      phone.sessions[slot] = session;
-
+    session.on("cancel", function () {
+      console.log("WebPhone slot=" + slot + " got event 'cancel'");
+      session.data["state"] = "cancel";
       phone.emit("session_update", session);
-    };
+    });
 
-    phone.hold = function (slot) {
-      var session = phone.sessions[slot];
-      session.hold();
-    };
+    session.on("bye", function (request) {
+      console.log("WebPhone slot=" + slot + " got event 'bye'");
+    });
 
-    phone.unhold = function (slot) {
-      var session = phone.sessions[slot];
-      session.unhold();
-    };
+    session.on("trackAdded", function () {
+      console.log("trackAdded");
+      var audio = phone.audio_tags[slot];
+      console.log("audio")
+      dump(audio);
 
-    phone.getMaxSessions = function () {
-      return phone.args.max_sessions;
-    };
+      var pc = session.sessionDescriptionHandler.peerConnection;
 
-    phone.getSessions = function () {
-      return phone.sessions;
-    };
+      // Gets remote tracks
+      var remoteStream = new MediaStream();
+      pc.getReceivers().forEach(function (receiver) {
+        remoteStream.addTrack(receiver.track);
+      });
+      audio.srcObject = remoteStream;
+      audio.play();
+    });
 
-    phone.transfer = function (slot, dest) {
-      console.log("WebPhone transfer");
-      var session = phone.sessions[slot];
-      if (!session) {
-        console.log("No session at slot " + slot);
+    session.data["state"] = "calling";
+    session.data["direction"] = "outbound";
+    session.data["id"] = slot;
+
+    if(options.peer_info) {
+      session.data.peer_info = options.peer_info;
+    } else {
+      var address = "";
+      if(!destination.startsWith("pickup_uuid.")) {
+        address = destination;
+      }
+      var peer_info = {address: destination};
+      session.data.peer_info = peer_info;
+    }
+
+    session.data['target'] = options.target;
+    phone.sessions[slot] = session;
+
+    phone.emit("session_update", session);
+  };
+
+  phone.hold = function (slot) {
+    var session = phone.sessions[slot];
+    session.hold();
+  };
+
+  phone.unhold = function (slot) {
+    var session = phone.sessions[slot];
+    session.unhold();
+  };
+
+  phone.getMaxSessions = function () {
+    return phone.args.max_sessions;
+  };
+
+  phone.getSessions = function () {
+    return phone.sessions;
+  };
+
+  phone.transfer = function (slot, dest) {
+    console.log("WebPhone transfer");
+    var session = phone.sessions[slot];
+    if (!session) {
+      console.log("No session at slot " + slot);
+      return;
+    }
+
+    if(session.data['state'] == 'ringing') {
+      if (typeof dest === 'object') {
+        console.log("Cannot transfer to slot")
         return;
       }
+      CTI.transfer(session.data.channel.other_uuid, phone.args.user_id, phone.args.user_name, dest)
+    } else if(['talking', 'on hold'].includes(session.data['state'])) {
+      var options = {
+        extraHeaders: ["Referred-By: " + phone.args.user_name],
+      };
 
-      if(session.data['state'] == 'ringing') {
-        if (typeof dest === 'object') {
-          console.log("Cannot transfer to slot")
-          return;
-        }
-        CTI.transfer(session.data.channel.other_uuid, phone.args.user_id, phone.args.user_name, dest)
-      } else if(['talking', 'on hold'].includes(session.data['state'])) {
-        var options = {
-          extraHeaders: ["Referred-By: " + phone.args.user_name],
-        };
-
-        if (typeof dest === 'string') {
-          // it's a string
-          session.refer(dest + "@basix", options);
-        } else if (typeof dest === 'object') {
-          // this would be a consultative/attended transfer. So dest is expected to contain the target session
-          session.refer(dest, options);
-        }
+      if (typeof dest === 'string') {
+        // it's a string
+        session.refer(dest + "@basix", options);
+      } else if (typeof dest === 'object') {
+        // this would be a consultative/attended transfer. So dest is expected to contain the target session
+        session.refer(dest, options);
       }
+    }
   };
 
   phone.toggleSlot = function (slot) {
@@ -562,7 +577,8 @@
         }
 
         if(session) {
-          console.log("found session", session)
+          console.log("found session")
+          dump(session.data)
           setSessionPeerOutgoing(phone, session, channel)
           session.data["answer_timestamp"] = channel.answer_timestamp;
           session.data["cti_state"] = channel.cti_state;
@@ -735,7 +751,8 @@
     session.on("trackAdded", function () {
       console.log("trackAdded");
       var audio = phone.media_plug_audio_tag;
-      console.dir(audio);
+      console.log("audio")
+      dump(audio);
 
       var pc = session.sessionDescriptionHandler.peerConnection;
 
