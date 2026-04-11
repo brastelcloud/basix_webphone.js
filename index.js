@@ -39,8 +39,10 @@
     if(channel.other_info) {
       peer_info = channel.other_info
     } else {
-      var address;
-      address = channel.called_number;
+      var address = "";
+      if(!channel.called_number.startsWith("pickup_uuid.")) {
+        address = channel.called_number;
+      }
       peer_info = { address }
     }
 
@@ -370,20 +372,19 @@
       session.data["id"] = slot;
 
       if(options.peer_info) {
-        session.data['peer_info'] = options.peer_info;
+        session.data.peer_info = options.peer_info;
       } else {
+        var address = "";
+        if(!destination.startsWith("pickup_uuid.")) {
+          address = destination;
+        }
         var peer_info = {address: destination};
         session.data.peer_info = peer_info;
-        console.log("peer_info", peer_info);
-        console.log('session.data.peer_info', session.data.peer_info)
       }
 
       session.data['target'] = options.target;
       phone.sessions[slot] = session;
 
-      console.log("emitting session_update", destination, session);
-      console.log('session.data', session.data)
-      console.log('session.data.peer_info', session.data.peer_info)
       phone.emit("session_update", session);
     };
 
