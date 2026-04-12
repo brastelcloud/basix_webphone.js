@@ -1,7 +1,11 @@
 "use strict";
 
 const EventEmitter = require("events");
+const SIP = require("sip.js");
 
+/**
+ * Helper to handle circular references in JSON stringify for SIP.js objects.
+ */
 function safeStringify(obj) {
   const seen = new WeakSet();
   return JSON.stringify(obj, (key, value) => {
@@ -13,116 +17,130 @@ function safeStringify(obj) {
   }, 2);
 }
 
-function dump(obj) {
-  console.log(safeStringify(obj))
-}
+class BasixWebPhone extends EventEmitter {
+  constructor() {
+    super();
+    this._initialized = false;
+    this.ua = null;
+    this.sessions = [];
+    this.audioTags = [];
+    this.parkingState = [];
+    this.isConnected = false;
+    this.args = null;
+    this.mediaPlugSession = null;
+    this.mediaPlugUuid = null;
+    this.pendingMediaPlugCmd = null;
+    this.mediaPlugAudioTag = null;
 
-function setSessionPeer(phone, session, channel) {
-  console.log("setSessionPeer")
-  dump([session.data, channel])
-  var peer_info
-  if(channel.other_info) {
-    peer_info = channel.other_info
-  } else {
-    var address;
-    if(channel.direction == 'inbound') {
-      address = channel.calling_number;
-    } else {
-      if(channel.called_number.startsWith("pickup_uuid.")) {
-        address = '';
-      } else {
-        address = channel.called_number;
+    // Default logger
+    this.logger = {
+      log: console.log.bind(console),
+      error: console.error.bind(console),
+      dir: console.dir.bind(console),
+      dump: (obj) => this.logger.log(safeStringify(obj))
+    };
+  }
+
+  /**
+   * Initialize the phone with configuration.
+   * @param {Object} args Configuration object.
+   */
+  init(args) {
+    if (this._initialized) {
+      this.logger.log("BasixWebPhone: Already initialized");
+      return;
+    }
+
+    this.logger.log("BasixWebPhone: Initializing");
+    this.logger.dir(args);
+
+    this.args = {
+      max_sessions: 2,
+      app_cname: "",
+      domain_name: "",
+      user_name: "",
+      user_id: null,
+      cti: null,
+      autoCreateAudioTags: true,
+      audioTags: [], // Optional: pass existing audio elements
+      ...args
+    };
+
+    this.sessions = new Array(this.args.max_sessions).fill(null);
+    this.parkingState = [];
+
+    this._setupAudioTags();
+    this._setupCtiListeners();
+    this._startUA();
+
+    this._initialized = true;
+  }
+
+  /**
+   * Manages audio element creation/assignment.
+   * @private
+   */
+  _setupAudioTags() {
+    // If user provided tags, use them.
+    if (this.args.audioTags && this.args.audioTags.length > 0) {
+      this.audioTags = this.args.audioTags;
+    } 
+    // Otherwise, create them if allowed.
+    else if (this.args.autoCreateAudioTags) {
+      for (let id = 0; id < this.args.max_sessions; id++) {
+        const audioTag = document.createElement("audio");
+        audioTag.id = `BasixWebPhoneRemoteAudio${id}`;
+        audioTag.autoplay = true;
+        document.body.appendChild(audioTag);
+        this.audioTags[id] = audioTag;
       }
-    }
-    peer_info = { address }
-  }
 
-  if(peer_info.whoscall) {
-    var user = phone.args.cti.get_store()['user'][channel.user_id]
-    if(user.flags & 1024) {
-      peer_info.whoscall = JSON.parse(decodeURIComponent(peer_info.whoscall))
-    } else {
-      peer_info.whoscall = null
+      const mediaPlugTag = document.createElement("audio");
+      mediaPlugTag.id = "BasixWebPhoneRemoteAudioMediaPlug";
+      mediaPlugTag.autoplay = true;
+      document.body.appendChild(mediaPlugTag);
+      this.mediaPlugAudioTag = mediaPlugTag;
     }
   }
 
-  session.data['peer_info'] = peer_info
-}
+  /**
+   * Sets up listeners for the CTI system.
+   * @private
+   */
+  _setupCtiListeners() {
+    const { cti } = this.args;
+    if (!cti) return;
 
-function setSessionPeerOutgoing(phone, session, channel) {
-  console.log("setSessionPeerOutgoing")
-  dump([session.data, channel])
-  var peer_info
-  if(channel.other_info) {
-    peer_info = channel.other_info
-  } else {
-    var address = "";
-    if(!channel.called_number.startsWith("pickup_uuid.")) {
-      address = channel.called_number;
-    }
-    peer_info = { address }
+    cti.on("open", () => this.logger.log("BasixWebPhone: CTI open"));
+    cti.on("closed", () => this.logger.log("BasixWebPhone: CTI closed"));
+    cti.on("error", (err) => {
+      this.logger.error("BasixWebPhone: CTI error", err);
+      this.emit("error", { source: "cti", error: err });
+    });
+
+    cti.on("initial_info", ({ element_name, data }) => {
+      Object.values(data).forEach(info => {
+        this.handleInfoEvent(element_name, info, "updated");
+      });
+    });
+
+    cti.on("info_event", ({ element_name, info, event_name }) => {
+      this.handleInfoEvent(element_name, info, event_name);
+    });
   }
 
-  if(peer_info.whoscall) {
-    var user = phone.args.cti.get_store()['user'][channel.user_id]
-    if(user.flags & 1024) {
-      peer_info.whoscall = JSON.parse(decodeURIComponent(peer_info.whoscall))
-    } else {
-      peer_info.whoscall = null
-    }
-  }
+  /**
+   * Starts the SIP User Agent.
+   * @private
+   */
+  _startUA() {
+    this.logger.log("BasixWebPhone: Starting UA");
+    this.isConnected = false;
 
-  session.data['peer_info'] = peer_info
-}
-
-function getRelativeParkPosition(absPosition, park_group) {
-  // Shared domain positions
-  if (absPosition >= 997 && absPosition <= 999) {
-    return absPosition - 993; // 997→4, 998→5, 999→6
-  }
-
-  // Validate range
-  if (absPosition < 901 || absPosition > 996) {
-    return null; // or throw error
-  }
-
-  // Base position for this group
-  var base = 901 + (park_group * 3);
-
-  // Calculate relative (1,2,3)
-  var relative = absPosition - base + 1;
-
-  // Ensure it's valid (belongs to this group)
-  if (relative < 1 || relative > 3) {
-    return null; // not part of this user's group
-  }
-
-  return relative;
-}
-
-module.exports = (function (env) {
-  var SIP = require("sip.js");
-
-  var phone = new Object();
-  Object.assign(phone, EventEmitter.prototype);
-
-  var process_ws_disconnection = function () {
-    if (!phone.ua) return;
-
-    phone.ua.stop();
-    delete phone.ua;
-    phone.emit("stopped");
-  };
-
-  phone._startUA = function () {
-    console.log("WebPhone._startUA: begin");
-    phone.isConnected = false;
-
-    phone.ua = new SIP.UA({
-      //uri: "ws_sip_" + phone.args.user_name + "@" + phone.args.domain_name,
-      uri: phone.args.user_name + "@" + phone.args.domain_name,
+    this.ua = new SIP.UA({
+      uri: `${this.args.user_name}@${this.args.domain_name}`,
       transportOptions: {
-        wsServers: ["wss://" + phone.args.app_cname + "/basix/api/ws_sip"],
+        wsServers: [`wss://${this.args.app_cname}/basix/api/ws_sip`],
         maxReconnectionAttempts: 0,
         connectionTimeout: 10000,
       },
@@ -131,673 +149,523 @@ module.exports = (function (env) {
       noAnswerTimeout: 180,
       autostart: false,
       sessionDescriptionHandlerFactoryOptions: {
-        constraints: {
-          audio: true,
-          video: false,
-        },
-        peerConnectionOptions: {
-          iceCheckingTimeout: 500,
-        },
+        constraints: { audio: true, video: false },
+        peerConnectionOptions: { iceCheckingTimeout: 500 },
       },
     });
 
-    console.log("Registering to transportCreated");
-    phone.ua.on("transportCreated", function (transport) {
-      console.log("transportCreated");
-
-      transport.on("connected", function () {
-        console.log("transport connected");
-        phone.isConnected = true;
+    this.ua.on("transportCreated", (transport) => {
+      transport.on("connected", () => {
+        this.logger.log("BasixWebPhone: Transport connected");
+        this.isConnected = true;
+        this.emit("connected");
       });
 
-      transport.on("transportError", function () {
-        console.log("transportError");
-        phone.isConnected = false;
-        process_ws_disconnection();
+      transport.on("transportError", () => {
+        this.logger.error("BasixWebPhone: Transport error");
+        this.isConnected = false;
+        this._processWsDisconnection();
       });
 
-      transport.on("disconnected", function () {
-        console.log("transport disconnected");
-        phone.isConnected = false;
-        process_ws_disconnection();
+      transport.on("disconnected", () => {
+        this.logger.log("BasixWebPhone: Transport disconnected");
+        this.isConnected = false;
+        this._processWsDisconnection();
       });
     });
 
-    phone.ua.on("unregistered", function () {
-      console.log("WebPhone: unregistered");
-      phone.ua.stop();
-      delete phone.ua;
-      phone.stopped();
+    this.ua.on("unregistered", () => {
+      this.logger.log("BasixWebPhone: Unregistered");
+      this.ua.stop();
+      this.emit("stopped");
     });
 
-    phone.ua.start();
-    console.log("WebPhone._startUA: end");
-  };
-
-  phone.addCtiIncomingCall = function(channel) {
-    console.log("addCtiIncomingCall")
-    dump(channel)
-
-    var slot = null;
-    for (var i = 0; i < phone.args.max_sessions; ++i) {
-      if (!phone.sessions[i]) {
-        console.log("slot " + i + " OK");
-        slot = i;
-        break;
-      }
-    }
-
-    if(slot == null) {
-      console.log("No free slot for incoming call")
-      return
-    }
-
-    // Fake session
-    var session = {data: {}}
-
-    session.data["state"] = "ringing";
-    session.data["direction"] = "inbound";
-    session.data["id"] = slot;
-    session.data["offer_timestamp"] = channel.offer_timestamp;
-    session.data["user_id"] = channel.user_id;
-    session.data["group_id"] = channel.group_id;
-    session.data["cti_state"] = channel.state;
-    session.data["target"] = channel.target;
-    setSessionPeer(phone, session, channel)
-
-    session.data["channel"] = channel;
-    phone.sessions[slot] = session;
-
-    phone.emit("session_update", session);
+    this.ua.start();
   }
 
-  phone.removeCtiIncomingCall = function(channel) {
-    console.log("removeCtiIncomingCall")
-    dump(channel)
-    dump(phone.sessions)
-    var foundSession = null;
-    for (var i = 0; i < phone.args.max_sessions; ++i) {
-      if (phone.sessions[i]) {
-        var session = phone.sessions[i]
-        if(session.data.channel && session.data.channel.uuid == channel.uuid) {
-          foundSession = session
-          break;
-        }
-      }
-    }
-
-    if(foundSession == null) {
-      console.log("Incoming call not found")
-      return
-    }
-
-    foundSession.data.state = "idle"
-
-    phone.emit("session_update", foundSession); // Emit idle state
-    delete phone.sessions[foundSession.data.id]; // Finally delete the session
+  _processWsDisconnection() {
+    if (!this.ua) return;
+    this.ua.stop();
+    this.emit("disconnected");
   }
 
-  phone.answerCtiCall = function(slot) {
-    console.log("WebPhone answerCtiCall");
-    var session = phone.sessions[slot];
-    if (!session) {
-      console.log("No session at slot " + slot);
-      return;
+  /**
+   * Starts the UA if not already started.
+   */
+  start() {
+    if (!this.ua) {
+      this._startUA();
     }
-
-    if(!session.data.channel) return;
-
-    phone.removeCtiIncomingCall(session.data.channel);
-
-    phone.makeCall("pickup_uuid." + session.data.channel.other_uuid, {slot, peer_info: session.data.peer_info, target: session.data.target})
   }
 
-  phone.makeCall = function (destination, options = {}) {
-    console.log("phone.makeCall")
-    dump(destination, options)
-    if (!phone.isConnected) {
-      console.log("Cannot make call as ua is not connected");
-      phone.emit('error', 'not_connected')
-      return false;
+  /**
+   * Stops and cleans up resources.
+   */
+  destroy() {
+    this.logger.log("BasixWebPhone: Destroying");
+    if (this.ua) {
+      this.ua.stop();
+      this.ua = null;
     }
 
-    var slot = options.slot;
-    if(!slot) {
-      for (var i = 0; i < phone.args.max_sessions; ++i) {
-        if (!phone.sessions[i]) {
-          console.log("slot " + i + " OK");
-          slot = i;
-          break;
-        }
-      }
+    // Cleanup audio tags if we created them
+    if (this.args.autoCreateAudioTags) {
+      this.audioTags.forEach(tag => tag?.remove());
+      this.mediaPlugAudioTag?.remove();
     }
 
-    if (slot == null) {
-      console.log("All slots in use");
-      phone.emit('error', 'all_slots_in_use')
-      return false;
-    }
+    this.sessions = [];
+    this.audioTags = [];
+    this._initialized = false;
+    this.removeAllListeners();
+  }
 
-    if(phone.sessions[slot]) {
-      console.log(`slot=${slot} in use`)
-      return
-    }
+  /**
+   * Places an outbound call.
+   * @returns {Promise<SIP.Session>}
+   */
+  makeCall(destination, options = {}) {
+    return new Promise((resolve, reject) => {
+      this.logger.log("BasixWebPhone: makeCall", destination);
 
-    var call_options = {
-      media: {
-        constraints: {
-          audio: true,
-          video: false,
-        },
-        render: {
-          remote: phone.audio_tags[slot],
-        },
-      },
-    };
-
-    var session = phone.ua.invite("sip:" + destination + "@anything", call_options);
-
-    session.on("progress", function (response) {
-      console.log("WebPhone slot=" + slot + " got event 'progress'")
-      dump(response.data);
-      if (response.statusCode === 183 && response.body) {
-          this.createDialog(response, 'UAC');
-          var the_session = this;
-          this.sessionDescriptionHandler.setDescription(response.body).then(function() {
-              the_session.status = 11; //C.STATUS_EARLY_MEDIA;
-              the_session.hasAnswer = true;
-          });
+      if (!this.isConnected) {
+        const err = "not_connected";
+        this.emit("error", err);
+        return reject(new Error(err));
       }
 
-      if(response.body) {
-        // Early media (180 or 183 with SDP)
-        session.data["state"] = "progress";
-        phone.emit("session_update", session);
-      } else if(response.statusCode == 180) {
-        if(session.data["state"] != "progress") {
-          // should not switch to alerting if we already got 183 Session Progress.
-
-          // If we didn't get progress, UI should play ringback tone
-          session.data["state"] = "alerting";
-          phone.emit("session_update", session);
-        }
+      let slot = options.slot;
+      if (slot === undefined) {
+        slot = this.sessions.findIndex(s => s === null);
       }
-    });
 
-    session.on("accepted", function (response) {
-      console.log("WebPhone slot=" + slot + " got event 'accepted'")
-      dump(response.data);
-      session.data["state"] = "talking";
-      phone.emit("session_update", session);
-      phone.holdOtherSessions(slot);
-      phone.hangupMediaPlugSession();
-    });
+      if (slot === -1 || slot === null) {
+        const err = "all_slots_in_use";
+        this.emit("error", err);
+        return reject(new Error(err));
+      }
 
-    session.on("rejected", function (response, cause) {
-      console.log("WebPhone slot=" + slot + " got event 'rejected'");
-      session.data["state"] = "rejected";
-      phone.emit("session_update", session);
-    });
+      if (this.sessions[slot]) {
+        return reject(new Error(`Slot ${slot} already in use`));
+      }
 
-    session.on("failed", function (response, cause) {
-      console.log("WebPhone slot=" + slot + " got event 'failed' with cause=" + cause);
-    });
-
-    session.on("terminated", function (message, cause) {
-      console.log("WebPhone slot=" + slot + " got event 'terminated' with cause=" + cause);
-      var idleSession = {
-        data: {
-          id: session.data.id,
-          state: "idle",
+      const callOptions = {
+        media: {
+          constraints: { audio: true, video: false },
+          render: { remote: this.audioTags[slot] },
         },
       };
-      phone.emit("session_update", idleSession); // Emit idle state
-      delete phone.sessions[session.data.id]; // Finally delete the session
+
+      const session = this.ua.invite(`sip:${destination}@anything`, callOptions);
+      session.data = {
+        id: slot,
+        state: "calling",
+        direction: "outbound",
+        target: options.target,
+        peer_info: options.peer_info || { address: destination.startsWith("pickup_uuid.") ? "" : destination }
+      };
+
+      this._attachSessionListeners(session, slot);
+      this.sessions[slot] = session;
+      this.emit("session_update", session);
+      
+      resolve(session);
+    });
+  }
+
+  _attachSessionListeners(session, slot) {
+    session.on("progress", (response) => {
+      this.logger.log(`BasixWebPhone: Slot ${slot} progress`, response.statusCode);
+
+      // Handle Early Media (SIP.js 183/180 with SDP)
+      if (response.statusCode === 183 && response.body) {
+        session.createDialog(response, 'UAC');
+        session.sessionDescriptionHandler.setDescription(response.body).then(() => {
+          session.status = 11; // C.STATUS_EARLY_MEDIA;
+          session.hasAnswer = true;
+        });
+      }
+
+      if (response.body) {
+        session.data.state = "progress";
+      } else if (response.statusCode === 180) {
+        if (session.data.state !== "progress") {
+          session.data.state = "alerting";
+        }
+      }
+      this.emit("session_update", session);
     });
 
-    session.on("cancel", function () {
-      console.log("WebPhone slot=" + slot + " got event 'cancel'");
-      session.data["state"] = "cancel";
-      phone.emit("session_update", session);
+    session.on("accepted", (response) => {
+      this.logger.log(`BasixWebPhone: Slot ${slot} accepted`);
+      session.data.state = "talking";
+      this.emit("session_update", session);
+      this.holdOtherSessions(slot);
+      this.hangupMediaPlugSession();
     });
 
-    session.on("bye", function (request) {
-      console.log("WebPhone slot=" + slot + " got event 'bye'");
+    session.on("rejected", (response, cause) => {
+      this.logger.log(`BasixWebPhone: Slot ${slot} rejected`, cause);
+      session.data.state = "rejected";
+      this.emit("session_update", session);
     });
 
-    session.on("trackAdded", function () {
-      console.log("trackAdded");
-      var audio = phone.audio_tags[slot];
-      console.log("audio")
-      dump(audio);
+    session.on("terminated", (message, cause) => {
+      this.logger.log(`BasixWebPhone: Slot ${slot} terminated`, cause);
+      const idleSession = { data: { id: slot, state: "idle" } };
+      this.emit("session_update", idleSession);
+      this.sessions[slot] = null;
+    });
 
-      var pc = session.sessionDescriptionHandler.peerConnection;
+    session.on("trackAdded", () => {
+      this.logger.log(`BasixWebPhone: Slot ${slot} trackAdded`);
+      const audio = this.audioTags[slot];
+      if (!audio) return;
 
-      // Gets remote tracks
-      var remoteStream = new MediaStream();
-      pc.getReceivers().forEach(function (receiver) {
-        remoteStream.addTrack(receiver.track);
+      const pc = session.sessionDescriptionHandler.peerConnection;
+      const remoteStream = new MediaStream();
+      pc.getReceivers().forEach(receiver => {
+        if (receiver.track) remoteStream.addTrack(receiver.track);
       });
       audio.srcObject = remoteStream;
-      audio.play();
+      audio.play().catch(err => this.logger.error("Audio play failed", err));
     });
+  }
 
-    session.data["state"] = "calling";
-    session.data["direction"] = "outbound";
-    session.data["id"] = slot;
+  /**
+   * Handle CTI incoming call event.
+   */
+  addCtiIncomingCall(channel) {
+    this.logger.log("BasixWebPhone: addCtiIncomingCall");
+    this.logger.dump(channel);
 
-    if(options.peer_info) {
-      session.data.peer_info = options.peer_info;
-    } else {
-      var address = "";
-      if(!destination.startsWith("pickup_uuid.")) {
-        address = destination;
-      }
-      var peer_info = {address: destination};
-      session.data.peer_info = peer_info;
-    }
-
-    session.data['target'] = options.target;
-    phone.sessions[slot] = session;
-
-    phone.emit("session_update", session);
-  };
-
-  phone.hold = function (slot) {
-    var session = phone.sessions[slot];
-    session.hold();
-  };
-
-  phone.unhold = function (slot) {
-    var session = phone.sessions[slot];
-    session.unhold();
-  };
-
-  phone.getMaxSessions = function () {
-    return phone.args.max_sessions;
-  };
-
-  phone.getSessions = function () {
-    return phone.sessions;
-  };
-
-  phone.transfer = function (slot, dest) {
-    console.log("WebPhone transfer");
-    var session = phone.sessions[slot];
-    if (!session) {
-      console.log("No session at slot " + slot);
+    const slot = this.sessions.findIndex(s => s === null);
+    if (slot === -1) {
+      this.logger.log("BasixWebPhone: No free slot for incoming call");
       return;
     }
 
-    if(session.data['state'] == 'ringing') {
-      if (typeof dest === 'object') {
-        console.log("Cannot transfer to slot")
-        return;
+    // Fake session for CTI ringing
+    const session = {
+      data: {
+        id: slot,
+        state: "ringing",
+        direction: "inbound",
+        offer_timestamp: channel.offer_timestamp,
+        user_id: channel.user_id,
+        group_id: channel.group_id,
+        cti_state: channel.state,
+        target: channel.target,
+        channel: channel
       }
-      CTI.transfer(session.data.channel.other_uuid, phone.args.user_id, phone.args.user_name, dest)
-    } else if(['talking', 'on hold'].includes(session.data['state'])) {
-      var options = {
-        extraHeaders: ["Referred-By: " + phone.args.user_name],
-      };
+    };
 
-      if (typeof dest === 'string') {
-        // it's a string
-        session.refer(dest + "@basix", options);
-      } else if (typeof dest === 'object') {
-        // this would be a consultative/attended transfer. So dest is expected to contain the target session
+    this._setSessionPeer(session, channel);
+    this.sessions[slot] = session;
+    this.emit("session_update", session);
+  }
+
+  removeCtiIncomingCall(channel) {
+    const slot = this.sessions.findIndex(s => s?.data?.channel?.uuid === channel.uuid);
+    if (slot === -1) return;
+
+    const session = this.sessions[slot];
+    session.data.state = "idle";
+    this.emit("session_update", session);
+    this.sessions[slot] = null;
+  }
+
+  /**
+   * Answer a call via CTI (triggers an outbound SIP pickup).
+   */
+  answerCtiCall(slot) {
+    const session = this.sessions[slot];
+    if (!session || !session.data.channel) return;
+
+    const { channel, peer_info, target } = session.data;
+    this.removeCtiIncomingCall(channel);
+    return this.makeCall(`pickup_uuid.${channel.other_uuid}`, { slot, peer_info, target });
+  }
+
+  hold(slot) {
+    const session = this.sessions[slot];
+    if (session && typeof session.hold === "function") {
+      session.hold();
+      session.data.state = "on hold";
+      this.emit("session_update", session);
+    }
+  }
+
+  unhold(slot) {
+    const session = this.sessions[slot];
+    if (session && typeof session.unhold === "function") {
+      session.unhold();
+      session.data.state = "talking";
+      this.emit("session_update", session);
+    }
+  }
+
+  toggleSlot(slot) {
+    const session = this.sessions[slot];
+    if (!session) return;
+
+    const state = session.data.state;
+    if (state === "talking") {
+      this.hold(slot);
+    } else if (state === "on hold") {
+      this.unhold(slot);
+      this.holdOtherSessions(slot);
+      this.hangupMediaPlugSession();
+    } else if (state === "ringing" && session.data.channel) {
+      this.answerCtiCall(slot);
+    }
+  }
+
+  holdOtherSessions(currentSlot) {
+    this.sessions.forEach((s, i) => {
+      if (i !== currentSlot && s && s.data.state === "talking") {
+        this.hold(i);
+      }
+    });
+  }
+
+  hangup(slot) {
+    const session = this.sessions[slot];
+    if (!session) return;
+
+    if (session.data.channel) {
+      this.args.cti.hangup(session.data.channel.uuid);
+    } else if (typeof session.terminate === "function") {
+      session.terminate();
+    }
+  }
+
+  sendDTMF(key) {
+    this.sessions.forEach(s => {
+      if (s && s.data.state === "talking" && typeof s.dtmf === "function") {
+        s.dtmf(key);
+      }
+    });
+  }
+
+  transfer(slot, dest) {
+    const session = this.sessions[slot];
+    if (!session) return;
+
+    if (session.data.state === "ringing") {
+      if (typeof dest === "object") return;
+      this.args.cti.transfer(session.data.channel.other_uuid, this.args.user_id, this.args.user_name, dest);
+    } else if (["talking", "on hold"].includes(session.data.state)) {
+      const options = { extraHeaders: [`Referred-By: ${this.args.user_name}`] };
+      if (typeof dest === "string") {
+        session.refer(`${dest}@basix`, options);
+      } else {
         session.refer(dest, options);
       }
     }
-  };
+  }
 
-  phone.toggleSlot = function (slot) {
-    console.log("WebPhone toggleSlot");
-    var session = phone.sessions[slot];
-    if (!session) {
-      console.log("No session at slot " + slot);
-      return;
+  /**
+   * Hangs up any active call in the first available talking/calling slot.
+   */
+  hangupCurrentCall() {
+    const activeSession = this.sessions.find(s => 
+      s && ["talking", "calling", "progress"].includes(s.data?.state)
+    );
+    if (activeSession && typeof activeSession.terminate === "function") {
+      activeSession.terminate();
     }
+  }
 
-    if (session.data["state"] == "talking") {
-      session.hold();
-      session.data["state"] = "on hold";
-      phone.emit("session_update", session);
-      return;
-    }
-
-    if (session.data["state"] == "on hold") {
-      session.unhold();
-      session.data["state"] = "talking";
-      phone.emit("session_update", session);
-    }
-
-    if (session.data["state"] == "ringing" && session.data.channel) {
-      phone.answerCtiCall(slot)
-    }
-
-    phone.holdOtherSessions(slot);
-    phone.hangupMediaPlugSession();
-  };
-
-  phone.hangupMediaPlugSession = function () {
-    if (!phone.media_plug_session) return;
-    phone.media_plug_session.terminate();
-    phone.emit("media_plug_terminated");
-  };
-
-  phone.holdOtherSessions = function (slot) {
-    for (var i = 0; i < phone.args.max_sessions; ++i) {
-      var s = phone.sessions[i];
-      if (i != slot && s && s.data["state"] == "talking") {
-        s.hold();
-        s.data["state"] = "on hold";
-        phone.emit("session_update", s);
-      }
-    }
-  };
-
-  phone.sendDTMF = function (key) {
-    for (var i = 0; i < phone.args.max_sessions; ++i) {
-      var s = phone.sessions[i];
-      if (s && s.data["state"] == "talking") {
-        s.dtmf(key);
-      }
-    }
-  };
-
-  phone.hangup = function (slot) {
-    console.log("Webphone hangup");
-    var session = phone.sessions[slot];
-    if (!session) {
-      console.log("No session at slot " + slot);
-      return;
-    }
-
-    if(session.data.channel) {
-      phone.args.cti.hangup(session.data.channel.uuid)
+  /**
+   * Internal Peer Info logic.
+   * @private
+   */
+  _setSessionPeer(session, channel) {
+    let peer_info;
+    if (channel.other_info) {
+      peer_info = channel.other_info;
     } else {
-      session.terminate();
+      let address = "";
+      if (channel.direction === "inbound") {
+        address = channel.calling_number;
+      } else if (!channel.called_number.startsWith("pickup_uuid.")) {
+        address = channel.called_number;
+      }
+      peer_info = { address };
     }
-    return;
-  }
 
-  phone.hangupCurrentCall = function () {
-    for (var i = 0; i < phone.args.max_sessions; ++i) {
-      var s = phone.sessions[i];
-      if (s && s.data["state"] == "talking") {
-        s.terminate();
-        return;
-      }
-      if (s && s.data["state"] == "calling") {
-        s.terminate();
-        return;
-      }
-      if (s && s.data["state"] == "progress") {
-        s.terminate();
-        return;
-      }
-    }
-  };
-
-  phone.handle_info_event = function (element_name, info, event_name) {
-    console.log("basix_webphone.js info_event", element_name, info, event_name)
-    if(element_name == "channel") {
-      var channel = info;
-
-      if(channel.user_id != phone.args.user_id) return;
-
-      if(channel.called_number == "LOCAL_PARK") {
-        if(channel.direction != "outbound") {
-          console.log("no outbound")
-          return;
-        }
-
-        if(!channel.state) {
-          console.log("no state")
-          return
-        }
-
-        if(event_name == "updated") {
-          if(channel.state.name != "ringing") {
-            console.log("no ringing")
-            return
-          }
-          phone.addCtiIncomingCall(channel);
-        } else if(event_name == "removed") {
-          phone.removeCtiIncomingCall(channel);
-        }
+    if (peer_info.whoscall) {
+      const store = this.args.cti.get_store();
+      const user = store["user"][channel.user_id];
+      if (user && (user.flags & 1024)) {
+        peer_info.whoscall = JSON.parse(decodeURIComponent(peer_info.whoscall));
       } else {
-        // Might be event for a channel for a webphone session.
-        var session = null
-        for (var i = 0; i < phone.args.max_sessions; ++i) {
-          if (phone.sessions[i] && phone.sessions[i].dialog && phone.sessions[i].dialog.id.callId == channel.call_id) {
-            session = phone.sessions[i]
-            break
-          }
-        }
-
-        if(session) {
-          console.log("found session")
-          dump(session.data)
-          setSessionPeerOutgoing(phone, session, channel)
-          session.data["answer_timestamp"] = channel.answer_timestamp;
-          session.data["cti_state"] = channel.cti_state;
-          phone.emit("session_update", session);
-        }
+        peer_info.whoscall = null;
       }
-    } else if(element_name == 'channel_waiting') {
-      var channel_waiting = info;
+    }
+    session.data.peer_info = peer_info;
+  }
 
-      if(channel_waiting.state.name != 'park') return;
-
-      var state = channel_waiting.state;
-
-      var store = phone.args.cti.get_store()
-
-      var user = store['user'][phone.args.user_id];
-
-      var slot = getRelativeParkPosition(state.data.slot, user.park_group)
-
-      console.log("slot", slot);
-      if(!slot) return;
-
-      if(event_name == 'added' || event_name == 'updated') {
-        var parker = store['user'][state.data.parker_id];
-
-        var whoscall = null;
-        if(channel_waiting.whoscall) {
-          if(user.flags & 1024) {
-            whoscall = JSON.parse(decodeURIComponent(channel_waiting.whoscall))
-          } else {
-            whoscall = null
-          }
-        }
-
-        var data = {
-          park_timestamp: state.ts,
-          park_position: state.data.slot,
-          end_user: channel_waiting.end_user,
-          parker,
-          uuid: channel_waiting.uuid,
-          peer_number: channel_waiting.direction == "inbound" ? channel_waiting.calling_number : channel_waiting.called_number,
-          whoscall,
-        }
-        phone.parking_state[slot] = data;
-      } else if(event_name == 'removed') {
-        phone.parking_state[slot] = null;
-      }
-
-      console.log("emitting parking_state_change", event_name);
-      phone.emit('parking_state_change', phone.parking_state);
+  /**
+   * Handle CTI Info Events.
+   */
+  handleInfoEvent(element_name, info, event_name) {
+    if (element_name === "channel") {
+      this._handleChannelEvent(info, event_name);
+    } else if (element_name === "channel_waiting") {
+      this._handleParkingEvent(info, event_name);
     }
   }
 
-  phone.init = function (args) {
-    console.log("WebPhone init");
-    console.dir(args);
+  /**
+   * Alias for handleInfoEvent for backward compatibility.
+   */
+  handle_info_event(element_name, info, event_name) {
+    return this.handleInfoEvent(element_name, info, event_name);
+  }
 
-    if (phone._initialized) {
-      console.log("Already initialized");
-      return;
+  _handleChannelEvent(channel, event_name) {
+    if (channel.user_id !== this.args.user_id) return;
+
+    if (channel.called_number === "LOCAL_PARK") {
+      if (channel.direction !== "outbound" || !channel.state) return;
+
+      if (event_name === "updated" && channel.state.name === "ringing") {
+        this.addCtiIncomingCall(channel);
+      } else if (event_name === "removed") {
+        this.removeCtiIncomingCall(channel);
+      }
+    } else {
+      // Update existing SIP session with CTI data if call IDs match
+      const session = this.sessions.find(s => 
+        s?.dialog?.id?.callId === channel.call_id
+      );
+
+      if (session) {
+        this._setSessionPeer(session, channel);
+        session.data.answer_timestamp = channel.answer_timestamp;
+        session.data.cti_state = channel.cti_state;
+        this.emit("session_update", session);
+      }
+    }
+  }
+
+  _handleParkingEvent(channel_waiting, event_name) {
+    if (channel_waiting.state.name !== "park") return;
+
+    const { state } = channel_waiting;
+    const store = this.args.cti.get_store();
+    const user = store["user"][this.args.user_id];
+    
+    const slot = this._getRelativeParkPosition(state.data.slot, user.park_group);
+    if (!slot) return;
+
+    if (event_name === "added" || event_name === "updated") {
+      let whoscall = null;
+      if (channel_waiting.whoscall && (user.flags & 1024)) {
+        whoscall = JSON.parse(decodeURIComponent(channel_waiting.whoscall));
+      }
+
+      this.parkingState[slot] = {
+        park_timestamp: state.ts,
+        park_position: state.data.slot,
+        end_user: channel_waiting.end_user,
+        parker: store["user"][state.data.parker_id],
+        uuid: channel_waiting.uuid,
+        peer_number: channel_waiting.direction === "inbound" ? channel_waiting.calling_number : channel_waiting.called_number,
+        whoscall,
+      };
+    } else if (event_name === "removed") {
+      this.parkingState[slot] = null;
     }
 
-    phone.args = args;
+    this.emit("parking_state_change", this.parkingState);
+  }
 
-    phone.sessions = [];
+  _getRelativeParkPosition(absPosition, park_group) {
+    if (absPosition >= 997 && absPosition <= 999) return absPosition - 993;
+    if (absPosition < 901 || absPosition > 996) return null;
 
-    phone.audio_tags = [];
+    const base = 901 + (park_group * 3);
+    const relative = absPosition - base + 1;
+    return (relative < 1 || relative > 3) ? null : relative;
+  }
 
-    phone.parking_state = [];
+  /**
+   * Media Plug (Eavesdrop/Whisper) logic.
+   */
+  makeMediaPlugCall() {
+    if (!this.isConnected) return false;
 
-    for (var id = 0; id < phone.args.max_sessions; id++) {
-      var audioTag = document.createElement("audio");
-      audioTag.id = "BasixWebPhoneRemoteAudio" + id;
-      document.body.appendChild(audioTag);
-      phone.audio_tags[id] = audioTag;
-    }
+    const session = this.ua.invite("sip:media_plug@anything");
+    this.mediaPlugSession = session;
 
-    var audioTag = document.createElement("audio");
-    audioTag.id = "BasixWebPhoneRemoteAudioMediaPlug";
-    document.body.appendChild(audioTag);
-    phone.media_plug_audio_tag = audioTag;
-
-    if(args.cti) {
-      args.cti.on('open', () => {
-        console.log("basix_webphone.js cti open")
-      })
-
-      args.cti.on('closed', () => {
-        console.log("basix_webphone.js cti closed")
-      })
-
-      args.cti.on('error', err => {
-        console.log("basix_webphone.js cti error", err)
-      })
-
-      args.cti.on('initial_info', ({element_name, data}) => {
-        Object.keys(data).forEach(key => {
-          var info = data[key];
-          phone.handle_info_event(element_name, info, "updated");
-        })
-      })
-
-      args.cti.on('info_event', ({element_name, info, event_name}) => {
-        phone.handle_info_event(element_name, info, event_name)
-      })
-    }
-
-    phone._startUA();
-
-    phone._initialized = true;
-  };
-
-  phone.start = function () {
-    console.log("WebPhone start");
-    if (!phone.ua) {
-      phone._startUA();
-    }
-  };
-
-  phone.makeMediaPlugCall = function () {
-    if (!phone.isConnected) {
-      console.log("Cannot make media_plug call as ua is not connected");
-      phone.emit('error', 'not_connected')
-      return false;
-    }
-
-    var options = null;
-
-    var session = phone.ua.invite("sip:media_plug@anything", options);
-
-    session.on("accepted", function (data) {
-      console.log("WebPhone MediaPlug got event 'accepted'");
-      var uuid = data.headers["X-Channel-Uuid"][0].raw;
-      console.log("WebPhone Media_plug_uuid=" + uuid);
-      phone.media_plug_uuid = uuid;
-      if (phone.pending_media_plug_cmd) {
-        setTimeout(function () {
-          console.log("Sending pending_media_plug_cmd");
-          phone.args.cti.sendMediaPlugCommand(
-            phone.media_plug_uuid,
-            phone.pending_media_plug_cmd,
-          );
-          phone.pending_media_plug_cmd = null;
+    session.on("accepted", (data) => {
+      const uuid = data.headers["X-Channel-Uuid"][0].raw;
+      this.mediaPlugUuid = uuid;
+      if (this.pendingMediaPlugCmd) {
+        setTimeout(() => {
+          this.args.cti.sendMediaPlugCommand(this.mediaPlugUuid, this.pendingMediaPlugCmd);
+          this.pendingMediaPlugCmd = null;
         }, 2000);
       }
     });
 
-    session.on("rejected", function (response, cause) {
-      console.log("WebPhone MediaPlug got event 'rejected'");
-      phone.emit('error', 'media_plug_call_rejected')
+    session.on("failed", () => this.emit("error", "media_plug_call_failed"));
+    session.on("terminated", () => {
+      this.mediaPlugSession = null;
+      this.mediaPlugUuid = null;
     });
 
-    session.on("failed", function (response, cause) {
-      console.log("WebPhone MediaPlug got event 'failed' with cause=" + cause);
-      phone.emit('error', 'media_plug_call_failed')
-
-      window.toast_mic_access_error();
-    });
-
-    session.on("terminated", function (message, cause) {
-      console.log("WebPhone MediaPlug 'terminated' with cause=" + cause);
-      phone.media_plug_session = null;
-      phone.media_plug_uuid = null;
-    });
-
-    session.on("bye", function (request) {
-      console.log("WebPhone MediaPlug got event 'bye'");
-    });
-
-    session.on("trackAdded", function () {
-      console.log("trackAdded");
-      var audio = phone.media_plug_audio_tag;
-      console.log("audio")
-      dump(audio);
-
-      var pc = session.sessionDescriptionHandler.peerConnection;
-
-      // Gets remote tracks
-      var remoteStream = new MediaStream();
-      pc.getReceivers().forEach(function (receiver) {
-        remoteStream.addTrack(receiver.track);
-      });
+    session.on("trackAdded", () => {
+      const audio = this.mediaPlugAudioTag;
+      if (!audio) return;
+      const pc = session.sessionDescriptionHandler.peerConnection;
+      const remoteStream = new MediaStream();
+      pc.getReceivers().forEach(r => r.track && remoteStream.addTrack(r.track));
       audio.srcObject = remoteStream;
-      audio.play();
+      audio.play().catch(e => this.logger.error(e));
     });
-
-    phone.media_plug_session = session;
 
     return true;
-  };
+  }
 
-  phone.eavesdrop = function (uuid, subcommand) {
-    var cmd = ["eavesdrop", uuid, subcommand];
-    console.log("WebPhone eavesdrop " + subcommand);
-    if (!phone.media_plug_session) {
-      if (phone.makeMediaPlugCall()) {
-        console.log("WebPhone.makeMediaPlugCall() successful");
-        phone.pending_media_plug_cmd = cmd;
-      } else {
-        console.log("WebPhone.makeMediaPlugCall() failed");
+  eavesdrop(uuid, subcommand) {
+    const cmd = ["eavesdrop", uuid, subcommand];
+    if (!this.mediaPlugSession) {
+      if (this.makeMediaPlugCall()) {
+        this.pendingMediaPlugCmd = cmd;
       }
-    } else if (phone.media_plug_session == "pending") {
-      console.log("WebPhone: pending");
-      phone.pending_media_plug_cmd = cmd;
     } else {
-      console.log("WebPhone: executing media_plug cmd");
-      phone.args.cti.sendMediaPlugCommand(phone.media_plug_uuid, cmd);
+      this.args.cti.sendMediaPlugCommand(this.mediaPlugUuid, cmd);
     }
-  };
+  }
 
-  phone.get_media_plug_uuid = function () {
-    return phone.media_plug_uuid;
-  };
-
-  phone.disconnect_media_plug = function () {
-    if (phone.media_plug_session) {
-      phone.media_plug_session.terminate();
+  hangupMediaPlugSession() {
+    if (this.mediaPlugSession) {
+      this.mediaPlugSession.terminate();
     }
-  };
+  }
 
-  return phone;
-})();
+  /**
+   * Alias for hangupMediaPlugSession for backward compatibility.
+   */
+  disconnect_media_plug() {
+    return this.hangupMediaPlugSession();
+  }
+
+  // Getters
+  getMaxSessions() { return this.args.max_sessions; }
+  getSessions() { return this.sessions; }
+  getMediaPlugUuid() { return this.mediaPlugUuid; }
+
+  /**
+   * Alias for getMediaPlugUuid for backward compatibility.
+   */
+  get_media_plug_uuid() {
+    return this.getMediaPlugUuid();
+  }
+}
+
+module.exports = new BasixWebPhone();
