@@ -84,7 +84,7 @@ class BasixWebPhone extends EventEmitter {
     // If user provided tags, use them.
     if (this.args.audioTags && this.args.audioTags.length > 0) {
       this.audioTags = this.args.audioTags;
-    } 
+    }
     // Otherwise, create them if allowed.
     else if (this.args.autoCreateAudioTags) {
       for (let id = 0; id < this.args.max_sessions; id++) {
@@ -140,7 +140,7 @@ class BasixWebPhone extends EventEmitter {
     this.ua = new SIP.UA({
       uri: `${this.args.user_name}@${this.args.domain_name}`,
       transportOptions: {
-        wsServers: [`wss://${this.args.app_cname}/basix/api/ws_sip`],
+        wsServers: this.args.wsServers,
         maxReconnectionAttempts: 0,
         connectionTimeout: 10000,
       },
@@ -268,7 +268,7 @@ class BasixWebPhone extends EventEmitter {
       this._attachSessionListeners(session, slot);
       this.sessions[slot] = session;
       this.emit("session_update", session);
-      
+
       resolve(session);
     });
   }
@@ -469,7 +469,7 @@ class BasixWebPhone extends EventEmitter {
    * Hangs up any active call in the first available talking/calling slot.
    */
   hangupCurrentCall() {
-    const activeSession = this.sessions.find(s => 
+    const activeSession = this.sessions.find(s =>
       s && ["talking", "calling", "progress"].includes(s.data?.state)
     );
     if (activeSession && typeof activeSession.terminate === "function") {
@@ -538,7 +538,7 @@ class BasixWebPhone extends EventEmitter {
       }
     } else {
       // Update existing SIP session with CTI data if call IDs match
-      const session = this.sessions.find(s => 
+      const session = this.sessions.find(s =>
         s?.dialog?.id?.callId === channel.call_id
       );
 
@@ -557,7 +557,7 @@ class BasixWebPhone extends EventEmitter {
     const { state } = channel_waiting;
     const store = this.args.cti.get_store();
     const user = store["user"][this.args.user_id];
-    
+
     const slot = this._getRelativeParkPosition(state.data.slot, user.park_group);
     if (!slot) return;
 

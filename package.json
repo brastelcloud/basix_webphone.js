@@ -18,6 +18,6 @@
   "homepage": "https://github.com/brastelcloud/basix_webphone.js#readme",
   "dependencies": {
     "events": "^3.2.0",
-    "sip.js": "^0.13.8"
+    "sip.js": "https://github.com/MayamaTakeshi/onsip-SIP.js#3756d04bc10cbd1c12b9a891cf8ccfd9a42505c7"
   }
 }
