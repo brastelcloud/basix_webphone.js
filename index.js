@@ -545,7 +545,7 @@ class BasixWebPhone extends EventEmitter {
       if (session) {
         this._setSessionPeer(session, channel);
         session.data.answer_timestamp = channel.answer_timestamp;
-        session.data.cti_state = channel.cti_state;
+        session.data.cti_state = channel.state;
         this.emit("session_update", session);
       }
     }
