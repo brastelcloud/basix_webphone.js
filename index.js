@@ -267,6 +267,9 @@ class BasixWebPhone extends EventEmitter {
 
       this._attachSessionListeners(session, slot);
       this.sessions[slot] = session;
+
+      this.logger.log("emitting session_update");
+      this.logger.dump(session);
       this.emit("session_update", session);
 
       resolve(session);
@@ -567,13 +570,26 @@ class BasixWebPhone extends EventEmitter {
         whoscall = JSON.parse(decodeURIComponent(channel_waiting.whoscall));
       }
 
+      var peer_info = {
+        direction: channel_waiting.direction,
+        peer_location: channel_waiting.peer_location,
+        address: channel_waiting.direction === "inbound" ? channel_waiting.calling_number : channel_waiting.called_number,
+        offer_timestamp: channel_waiting.offer_timestamp,
+      }
+
+      if(channel_waiting.user_id) {
+        peer_info = {...peer_info, type: "user", user_id: channel_waiting.user_id}
+      } else if(channel_waiting.end_user) {
+        peer_info = {...peer_info, type: "end_user", "end_user": channel_waiting.end_user}
+      }
+
       this.parkingState[slot] = {
         park_timestamp: state.ts,
         park_position: state.data.slot,
         end_user: channel_waiting.end_user,
         parker: store["user"][state.data.parker_id],
         uuid: channel_waiting.uuid,
-        peer_number: channel_waiting.direction === "inbound" ? channel_waiting.calling_number : channel_waiting.called_number,
+        peer_info,
         whoscall,
       };
     } else if (event_name === "removed") {
