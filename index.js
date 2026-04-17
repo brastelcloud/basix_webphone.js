@@ -531,7 +531,7 @@ class BasixWebPhone extends EventEmitter {
   _handleChannelEvent(channel, event_name) {
     if (channel.user_id !== this.args.user_id) return;
 
-    if (channel.called_number === "LOCAL_PARK") {
+    if (channel.called_number === "RINGING_PARK") {
       if (channel.direction !== "outbound" || !channel.state) return;
 
       if (event_name === "updated" && channel.state.name === "ringing") {
