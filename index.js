@@ -31,7 +31,7 @@ class BasixWebPhone extends EventEmitter {
     this.mediaPlugUuid = null;
     this.pendingMediaPlugCmd = null;
     this.mediaPlugAudioTag = null;
-    this.auto_answer = true;
+    this.#auto_answer = true;
 
     // Default logger
     this.logger = {
@@ -539,7 +539,7 @@ class BasixWebPhone extends EventEmitter {
 
       if (event_name === "updated" && channel.state.name === "ringing") {
         var slot = this.addCtiIncomingCall(channel);
-        if(this.auto_answer && channel.tags && channel.tags.includes("auto_answer")) {
+        if(this.auto_answer() && channel.tags && channel.tags.includes("auto_answer")) {
           this.answerCtiCall(slot);
         }
       } else if (event_name === "removed") {
@@ -690,12 +690,12 @@ class BasixWebPhone extends EventEmitter {
   }
 
   set auto_answer(status) {
-    this.auto_answer = status;
-    return this.auto_answer;
+    this.#auto_answer = status;
+    return this.#auto_answer;
   }
 
   get auto_answer() {
-    return this.auto_answer;
+    return this.#auto_answer;
   }
 }
 
