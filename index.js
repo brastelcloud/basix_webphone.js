@@ -18,6 +18,8 @@ function safeStringify(obj) {
 }
 
 class BasixWebPhone extends EventEmitter {
+  #auto_answer = true;
+
   constructor() {
     super();
     this._initialized = false;
@@ -31,7 +33,6 @@ class BasixWebPhone extends EventEmitter {
     this.mediaPlugUuid = null;
     this.pendingMediaPlugCmd = null;
     this.mediaPlugAudioTag = null;
-    this.#auto_answer = true;
 
     // Default logger
     this.logger = {
@@ -539,7 +540,7 @@ class BasixWebPhone extends EventEmitter {
 
       if (event_name === "updated" && channel.state.name === "ringing") {
         var slot = this.addCtiIncomingCall(channel);
-        if(this.auto_answer() && channel.tags && channel.tags.includes("auto_answer")) {
+        if(this.auto_answer && channel.tags && channel.tags.includes("auto_answer")) {
           this.answerCtiCall(slot);
         }
       } else if (event_name === "removed") {
