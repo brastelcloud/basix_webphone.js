@@ -31,6 +31,7 @@ class BasixWebPhone extends EventEmitter {
     this.mediaPlugUuid = null;
     this.pendingMediaPlugCmd = null;
     this.mediaPlugAudioTag = null;
+    this.auto_answer = true;
 
     // Default logger
     this.logger = {
@@ -366,6 +367,8 @@ class BasixWebPhone extends EventEmitter {
     this._setSessionPeer(session, channel);
     this.sessions[slot] = session;
     this.emit("session_update", session);
+
+    return slot;
   }
 
   removeCtiIncomingCall(channel) {
@@ -535,7 +538,10 @@ class BasixWebPhone extends EventEmitter {
       if (channel.direction !== "outbound" || !channel.state) return;
 
       if (event_name === "updated" && channel.state.name === "ringing") {
-        this.addCtiIncomingCall(channel);
+        var slot = this.addCtiIncomingCall(channel);
+        if(this.auto_answer && channel.tags && channel.tags.includes("auto_answer")) {
+          this.answerCtiCall(slot);
+        }
       } else if (event_name === "removed") {
         this.removeCtiIncomingCall(channel);
       }
@@ -681,6 +687,15 @@ class BasixWebPhone extends EventEmitter {
    */
   get_media_plug_uuid() {
     return this.getMediaPlugUuid();
+  }
+
+  set auto_answer(status) {
+    this.auto_answer = status;
+    return this.auto_answer;
+  }
+
+  get auto_answer() {
+    return this.auto_answer;
   }
 }
 
