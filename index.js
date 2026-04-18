@@ -268,12 +268,16 @@ class BasixWebPhone extends EventEmitter {
       this._attachSessionListeners(session, slot);
       this.sessions[slot] = session;
 
-      this.logger.log("emitting session_update");
-      this.logger.dump(session);
-      this.emit("session_update", session);
+      this._emit_session_update(session);
 
       resolve(session);
     });
+  }
+
+  _emit_session_update(session) {
+      this.logger.log("emitting session_update");
+      this.logger.dump(session.data);
+      this.emit("session_update", session);
   }
 
   _attachSessionListeners(session, slot) {
@@ -296,13 +300,13 @@ class BasixWebPhone extends EventEmitter {
           session.data.state = "alerting";
         }
       }
-      this.emit("session_update", session);
+      this._emit_session_update(session);
     });
 
     session.on("accepted", (response) => {
       this.logger.log(`BasixWebPhone: Slot ${slot} accepted`);
       session.data.state = "talking";
-      this.emit("session_update", session);
+      this._emit_session_update(session);
       this.holdOtherSessions(slot);
       this.hangupMediaPlugSession();
     });
@@ -310,13 +314,13 @@ class BasixWebPhone extends EventEmitter {
     session.on("rejected", (response, cause) => {
       this.logger.log(`BasixWebPhone: Slot ${slot} rejected`, cause);
       session.data.state = "rejected";
-      this.emit("session_update", session);
+      this._emit_session_update(session);
     });
 
     session.on("terminated", (message, cause) => {
       this.logger.log(`BasixWebPhone: Slot ${slot} terminated`, cause);
       const idleSession = { data: { id: slot, state: "idle" } };
-      this.emit("session_update", idleSession);
+      this._emit_session_update(idleSession);
       this.sessions[slot] = null;
     });
 
@@ -365,7 +369,7 @@ class BasixWebPhone extends EventEmitter {
 
     this._setSessionPeer(session, channel);
     this.sessions[slot] = session;
-    this.emit("session_update", session);
+    this._emit_session_update(session);
 
     return slot;
   }
@@ -376,7 +380,7 @@ class BasixWebPhone extends EventEmitter {
 
     const session = this.sessions[slot];
     session.data.state = "idle";
-    this.emit("session_update", session);
+    this._emit_session_update(session);
     this.sessions[slot] = null;
   }
 
@@ -397,7 +401,7 @@ class BasixWebPhone extends EventEmitter {
     if (session && typeof session.hold === "function") {
       session.hold();
       session.data.state = "on hold";
-      this.emit("session_update", session);
+      this._emit_session_update(session);
     }
   }
 
@@ -406,7 +410,7 @@ class BasixWebPhone extends EventEmitter {
     if (session && typeof session.unhold === "function") {
       session.unhold();
       session.data.state = "talking";
-      this.emit("session_update", session);
+      this._emit_session_update(session);
     }
   }
 
@@ -487,14 +491,13 @@ class BasixWebPhone extends EventEmitter {
    * @private
    */
   _setSessionPeer(session, channel) {
+    console.log("_setSesionPeer", channel)
     let peer_info;
     if (channel.other_info) {
       peer_info = channel.other_info;
     } else {
       let address = "";
-      if (channel.direction === "inbound") {
-        address = channel.calling_number;
-      } else if (!channel.called_number.startsWith("pickup_uuid.")) {
+      if (!channel.called_number.startsWith("pickup_uuid.")) {
         address = channel.called_number;
       }
       peer_info = { address };
@@ -551,7 +554,7 @@ class BasixWebPhone extends EventEmitter {
         this._setSessionPeer(session, channel);
         session.data.answer_timestamp = channel.answer_timestamp;
         session.data.cti_state = channel.state;
-        this.emit("session_update", session);
+        this._emit_session_update(session);
       }
     }
   }
