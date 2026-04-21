@@ -349,7 +349,7 @@ class BasixWebPhone extends EventEmitter {
     const slot = this.sessions.findIndex(s => s === null);
     if (slot === -1) {
       this.logger.log("BasixWebPhone: No free slot for incoming call");
-      return;
+      return null;
     }
 
     // Fake session for CTI ringing
@@ -393,7 +393,12 @@ class BasixWebPhone extends EventEmitter {
 
     const { channel, peer_info, target } = session.data;
     this.removeCtiIncomingCall(channel);
-    return this.makeCall(`pickup_uuid.${channel.other_uuid}`, { slot, peer_info, target });
+    if(channel.other_uuid) {
+      return this.makeCall(`pickup_uuid.${channel.other_uuid}`, { slot, peer_info, target });
+    } else {
+      var reference_uuid = channel.called_number.split(".")[1];
+      return this.makeCall(`assimilate.${reference_uuid}`, { slot, peer_info, target });
+    }
   }
 
   hold(slot) {
@@ -496,11 +501,16 @@ class BasixWebPhone extends EventEmitter {
     if (channel.other_info) {
       peer_info = channel.other_info;
     } else {
-      let address = "";
-      if (!channel.called_number.startsWith("pickup_uuid.")) {
-        address = channel.called_number;
+      peer_info = session.data.peer_info;
+      if(!peer_info) {
+        let address = "";
+        if (channel.called_number.startsWith("RINGING_PARK")) {
+          address = channel.calling_number;
+        } else if (!channel.called_number.startsWith("pickup_uuid.")) {
+          address = channel.called_number;
+        }
+        peer_info = { address };
       }
-      peer_info = { address };
     }
 
     if (peer_info.whoscall) {
@@ -536,11 +546,14 @@ class BasixWebPhone extends EventEmitter {
   _handleChannelEvent(channel, event_name) {
     if (channel.user_id !== this.args.user_id) return;
 
-    if (channel.called_number === "RINGING_PARK") {
+    if (channel.called_number.match(/^RINGING_PARK/)) {
       if (channel.direction !== "outbound" || !channel.state) return;
 
       if (event_name === "updated" && channel.state.name === "ringing") {
-        this.addCtiIncomingCall(channel);
+        var slot = this.addCtiIncomingCall(channel);
+        if(slot >= 0 && channel.tags && channel.tags.includes('auto_answer')) {
+          this.answerCtiCall(slot);
+        }
       } else if (event_name === "removed") {
         this.removeCtiIncomingCall(channel);
       }
