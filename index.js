@@ -220,6 +220,41 @@ class BasixWebPhone extends EventEmitter {
     this.removeAllListeners();
   }
 
+  _clearAudioElement(audio) {
+    if (!audio) return;
+
+    audio.pause();
+    audio.srcObject = null;
+  }
+
+  _attachRemoteAudio(audio, session, label = "Audio play failed") {
+    if (!audio || !session.sessionDescriptionHandler) return;
+
+    const { peerConnection } = session.sessionDescriptionHandler;
+    if (!peerConnection) return;
+
+    let remoteStream = audio.srcObject;
+    if (!(remoteStream instanceof MediaStream)) {
+      remoteStream = new MediaStream();
+      audio.srcObject = remoteStream;
+    }
+
+    const existingTrackIds = new Set(remoteStream.getTracks().map(track => track.id));
+    peerConnection.getReceivers().forEach((receiver) => {
+      if (receiver.track && !existingTrackIds.has(receiver.track.id)) {
+        remoteStream.addTrack(receiver.track);
+      }
+    });
+
+    const playPromise = audio.play();
+    if (playPromise && typeof playPromise.catch === "function") {
+      playPromise.catch((err) => {
+        if (err && err.name === "AbortError") return;
+        this.logger.error(label, err);
+      });
+    }
+  }
+
   /**
    * Places an outbound call.
    * @returns {Promise<SIP.Session>}
@@ -319,6 +354,7 @@ class BasixWebPhone extends EventEmitter {
 
     session.on("terminated", (message, cause) => {
       this.logger.log(`BasixWebPhone: Slot ${slot} terminated`, cause);
+      this._clearAudioElement(this.audioTags[slot]);
       const idleSession = { data: { id: slot, state: "idle" } };
       this._emit_session_update(idleSession);
       this.sessions[slot] = null;
@@ -326,16 +362,7 @@ class BasixWebPhone extends EventEmitter {
 
     session.on("trackAdded", () => {
       this.logger.log(`BasixWebPhone: Slot ${slot} trackAdded`);
-      const audio = this.audioTags[slot];
-      if (!audio) return;
-
-      const pc = session.sessionDescriptionHandler.peerConnection;
-      const remoteStream = new MediaStream();
-      pc.getReceivers().forEach(receiver => {
-        if (receiver.track) remoteStream.addTrack(receiver.track);
-      });
-      audio.srcObject = remoteStream;
-      audio.play().catch(err => this.logger.error("Audio play failed", err));
+      this._attachRemoteAudio(this.audioTags[slot], session);
     });
   }
 
@@ -648,18 +675,13 @@ class BasixWebPhone extends EventEmitter {
 
     session.on("failed", () => this.emit("error", "media_plug_call_failed"));
     session.on("terminated", () => {
+      this._clearAudioElement(this.mediaPlugAudioTag);
       this.mediaPlugSession = null;
       this.mediaPlugUuid = null;
     });
 
     session.on("trackAdded", () => {
-      const audio = this.mediaPlugAudioTag;
-      if (!audio) return;
-      const pc = session.sessionDescriptionHandler.peerConnection;
-      const remoteStream = new MediaStream();
-      pc.getReceivers().forEach(r => r.track && remoteStream.addTrack(r.track));
-      audio.srcObject = remoteStream;
-      audio.play().catch(e => this.logger.error(e));
+      this._attachRemoteAudio(this.mediaPlugAudioTag, session, "Media plug audio play failed");
     });
 
     return true;
