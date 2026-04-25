@@ -46,6 +46,12 @@ class BasixWebPhone extends EventEmitter {
    * @param {Object} args Configuration object.
    */
   init(args) {
+    window.addEventListener("pagehide", () => {
+      this.ua.stop();
+      console.log("GOT pagehide")
+    });
+    console.log("pagehide listener attached")
+
     if (this._initialized) {
       this.logger.log("BasixWebPhone: Already initialized");
       return;
