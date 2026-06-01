@@ -356,6 +356,7 @@ class BasixWebPhone extends EventEmitter {
       this.logger.log(`BasixWebPhone: Slot ${slot} rejected`, cause);
       session.data.state = "rejected";
       this._emit_session_update(session);
+      this.emit('no_answer');
     });
 
     session.on("terminated", (message, cause) => {
