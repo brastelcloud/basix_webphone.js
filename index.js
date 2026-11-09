@@ -154,6 +154,7 @@ class BasixWebPhone extends EventEmitter {
       registerExpires: 100,
       noAnswerTimeout: 180,
       autostart: false,
+      dtmfType: "rtp",
       sessionDescriptionHandlerFactoryOptions: {
         constraints: { audio: true, video: false },
         peerConnectionOptions: { iceCheckingTimeout: 500 },
