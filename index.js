@@ -294,6 +294,7 @@ class BasixWebPhone extends EventEmitter {
         media: {
           constraints: { audio: true, video: false },
           render: { remote: this.audioTags[slot] },
+          RTCOfferOptions: { voiceActivityDetection: false },
         },
       };
 
