@@ -35,11 +35,13 @@ class BasixWebPhone extends EventEmitter {
     this.pendingMediaPlugCmd = null;
     this.mediaPlugAudioTag = null;
 
-    // Default logger
+    // React Native/Hermes does not expose every browser console method.
+    const output = typeof console === "undefined" ? {} : console;
+    const log = typeof output.log === "function" ? output.log.bind(output) : () => {};
     this.logger = {
-      log: console.log.bind(console),
-      error: console.error.bind(console),
-      dir: console.dir.bind(console),
+      log,
+      error: typeof output.error === "function" ? output.error.bind(output) : log,
+      dir: typeof output.dir === "function" ? output.dir.bind(output) : log,
       dump: (obj) => this.logger.log(safeStringify(obj))
     };
   }
@@ -108,6 +110,15 @@ class BasixWebPhone extends EventEmitter {
     });
 
     this._listenCti(cti, "initial_info", ({ element_name, data }) => {
+      if (element_name === "channel") {
+        const live = new Set(Object.values(data).filter(channel => channel.last_event !== "CHANNEL_HANGUP" && channel.state?.name !== "hangup").map(channel => channel.uuid));
+        for (const session of [...this.sessions]) {
+          if (session?.data.cti_channel_uuid && !live.has(session.data.cti_channel_uuid)) {
+            session.close?.();
+            this._releaseSession(session.data.id, session);
+          }
+        }
+      }
       Object.values(data).forEach(info => {
         this.handleInfoEvent(element_name, info, "updated");
       });
@@ -315,6 +326,11 @@ class BasixWebPhone extends EventEmitter {
         session.sessionDescriptionHandler.setDescription(response.body).then(() => {
           session.status = 11; // C.STATUS_EARLY_MEDIA;
           session.hasAnswer = true;
+        }).catch(error => {
+          this.logger.error("Early media failed", error);
+          if (this.sessions[slot] === session) {
+            try { session.terminate(); } finally { this._releaseSession(slot, session); }
+          }
         });
       }
 
@@ -343,22 +359,36 @@ class BasixWebPhone extends EventEmitter {
       session.data.state = "rejected";
       this._emit_session_update(session);
       this.emit('no_answer');
+      this._releaseSession(slot, session);
     });
 
-    session.on("terminated", (message, cause) => {
-      if (this.sessions[slot] !== session) return;
-      this.logger.log(`BasixWebPhone: Slot ${slot} terminated`, cause);
-      this._clearAudioElement(this.audioTags[slot]);
-      const idleSession = { data: { id: slot, state: "idle" } };
-      this.sessions[slot] = null;
-      this._emit_session_update(idleSession);
+    // SIP.js does not always emit terminated after local CANCEL or a failed
+    // final SDP answer. Release the UI/native slot on every terminal outcome.
+    session.on("cancel", () => this._releaseSession(slot, session));
+    session.on("bye", () => {
+      try { session.close?.(); } finally { this._releaseSession(slot, session); }
     });
+    session.on("failed", (response, cause) => {
+      const current = this.sessions[slot] === session;
+      try { session.close?.(); } finally { this._releaseSession(slot, session); }
+      if (current) this.emit("call_failed", { slot, cause, statusCode: response?.statusCode });
+    });
+    session.on("terminated", () => this._releaseSession(slot, session));
 
     session.on("trackAdded", () => {
       if (this.sessions[slot] !== session) return;
       this.logger.log(`BasixWebPhone: Slot ${slot} trackAdded`);
       this._attachRemoteAudio(this.audioTags[slot], session);
     });
+  }
+
+  _releaseSession(slot, session) {
+    // Late responses from a cancelled dialog must never clear a reused slot.
+    if (this.sessions[slot] !== session) return;
+    this.sessions[slot] = null;
+    try { this._clearAudioElement(this.audioTags[slot]); }
+    catch (error) { this.logger.error("Remote audio cleanup failed", error); }
+    this._emit_session_update({ data: { id: slot, state: "idle" } });
   }
 
   /**
@@ -402,8 +432,8 @@ class BasixWebPhone extends EventEmitter {
 
     const session = this.sessions[slot];
     session.data.state = "idle";
-    this._emit_session_update(session);
     this.sessions[slot] = null;
+    this._emit_session_update(session);
   }
 
   /**
@@ -472,7 +502,14 @@ class BasixWebPhone extends EventEmitter {
     if (session.data.channel) {
       this.args.cti.hangup(session.data.channel.uuid);
     } else if (typeof session.terminate === "function") {
-      session.terminate();
+      try {
+        if (!session.isCanceled) session.terminate();
+      } catch (error) {
+        session.close?.();
+        throw error;
+      } finally {
+        this._releaseSession(slot, session);
+      }
     }
   }
 
@@ -509,7 +546,7 @@ class BasixWebPhone extends EventEmitter {
       s && ["talking", "calling", "progress"].includes(s.data?.state)
     );
     if (activeSession && typeof activeSession.terminate === "function") {
-      activeSession.terminate();
+      this.hangup(activeSession.data.id);
     }
   }
 
@@ -586,6 +623,12 @@ class BasixWebPhone extends EventEmitter {
       );
 
       if (session) {
+        if (event_name === "removed" || channel.last_event === "CHANNEL_HANGUP" || channel.state?.name === "hangup") {
+          session.close?.();
+          this._releaseSession(session.data.id, session);
+          return;
+        }
+        session.data.cti_channel_uuid = channel.uuid;
         this._setSessionPeer(session, channel);
         session.data.answer_timestamp = channel.answer_timestamp;
         session.data.cti_state = channel.state;

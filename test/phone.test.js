@@ -211,3 +211,73 @@ test("failed initialization detaches CTI handlers and permits retry", () => {
   assert.equal(cti.listenerCount("info_event"), 0);
   assert.equal(phone._initialized, false);
 });
+
+
+test("phone construction supports the reduced Hermes console", () => {
+  const vm = require("node:vm");
+  const fs = require("node:fs");
+  const source = fs.readFileSync(require.resolve("../core"), "utf8");
+  const output = [];
+  const module = { exports: {} };
+  vm.runInNewContext(source, {
+    module, require,
+    console: { log: value => output.push(value), error() {} },
+  });
+  const phone = new module.exports({});
+  phone.logger.dir("details");
+  assert.deepEqual(output, ["details"]);
+  const withoutConsole = { exports: {} };
+  vm.runInNewContext(source, { module: withoutConsole, require, console: undefined });
+  assert.doesNotThrow(() => new withoutConsole.exports({}).logger.dump({ state: "ready" }));
+});
+
+test("CANCEL, failed SDP, and BYE without terminated all release their slots", async () => {
+  const { phone } = fixture();
+  for (const event of ["cancel", "failed", "bye", "rejected"]) {
+    const call = await phone.makeCall("100");
+    let closed = false;
+    call.close = () => { closed = true; };
+    const snapshots = [];
+    phone.on("session_update", update => { if (update.data.state === "idle") snapshots.push(phone.getSessions()[0]); });
+    call.emit(event, undefined, "Bad Media Description");
+    assert.equal(phone.getSessions()[0], null);
+    assert.equal(snapshots[0], null);
+    if (["failed", "bye"].includes(event)) assert.equal(closed, true);
+    const replacement = await phone.makeCall("101");
+    call.emit("terminated");
+    call.emit("failed");
+    assert.equal(phone.getSessions()[0], replacement);
+    phone.hangup(0);
+  }
+  phone.destroy();
+});
+
+test("hangup frees cancelled calls immediately while retaining late SIP response handling", async () => {
+  const { phone } = fixture();
+  const call = await phone.makeCall("100");
+  call.terminate = () => { call.isCanceled = true; call.emit("cancel"); };
+  phone.hangup(0);
+  assert.equal(phone.getSessions()[0], null);
+  const replacement = await phone.makeCall("101");
+  call.emit("bye");
+  assert.equal(phone.getSessions()[0], replacement);
+  phone.destroy();
+});
+
+test("CTI hangup and reconnect snapshots release only confirmed ended SIP legs", async () => {
+  const { phone, cti } = fixture();
+  const call = await phone.makeCall("100");
+  call.dialog = { id: { callId: "sip-call" } };
+  call.close = () => {};
+  const channel = { uuid: "channel", call_id: "sip-call", user_id: 42, called_number: "100", state: { name: "bridged" } };
+  cti.emit("info_event", { element_name: "channel", info: channel, event_name: "updated" });
+  assert.equal(call.data.cti_channel_uuid, "channel");
+  const pending = await phone.makeCall("101");
+  cti.emit("initial_info", { element_name: "channel", data: {} });
+  assert.equal(phone.getSessions()[0], null);
+  assert.equal(phone.getSessions()[1], pending);
+  pending.dialog = { id: { callId: "pending-call" } };
+  cti.emit("info_event", { element_name: "channel", info: { ...channel, call_id: "pending-call", last_event: "CHANNEL_HANGUP" }, event_name: "updated" });
+  assert.equal(phone.getSessions()[1], null);
+  phone.destroy();
+});
